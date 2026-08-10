@@ -1,0 +1,24 @@
+# Copy to node_config.yaml and edit. The happy path is: change node_name,
+# coordinator_url, model_name, and hardware -- everything else has a default.
+
+node_name: "gaming-pc-1"
+coordinator_url: "http://localhost:8000"
+model_name: "llama3.1:8b-instruct-q4_K_M"
+max_concurrent_jobs: 1
+
+location:
+  city: "Toronto"
+  country: "CA"
+
+hardware: "RTX 4080 16GB, Ryzen 7 7800X3D, 32GB RAM"
+
+# Phase 2 placeholders -- leave null in Phase 1.
+measured_watts: null
+grid_zone: null
+
+# Optional, all have sane defaults:
+# ollama_url: "http://localhost:11434"
+# heartbeat_interval_s: 30
+# poll_interval_s: 3
+# poll_backoff_cap_s: 300
+# state_path: ".node_state.json"

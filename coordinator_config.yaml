@@ -1,0 +1,13 @@
+# Copy/edit as needed, or override any field with COORDINATOR_<FIELD> env vars.
+
+host: "0.0.0.0"
+port: 8000
+db_path: "coordinator.db"
+
+heartbeat_timeout_s: 90
+default_verification_pct: 0.05
+default_payout_rate: 0.00001
+default_job_timeout_s: 300
+dispatch_interval_s: 2.0
+max_job_attempts: 3
+log_level: "INFO"

@@ -1,0 +1,93 @@
+<title>Distributed Inference Network</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; margin: 2rem; max-width: 1000px; }
+  h1 { font-size: 1.4rem; }
+  h2 { font-size: 1.1rem; margin-top: 2rem; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #8884; }
+  .status-idle { color: #2a7; font-weight: 600; }
+  .status-busy { color: #c90; font-weight: 600; }
+  .status-offline { color: #c33; font-weight: 600; }
+  .summary { display: flex; gap: 2rem; flex-wrap: wrap; margin: 1rem 0; }
+  .stat { background: #8881; border-radius: 8px; padding: 0.75rem 1.25rem; }
+  .stat .value { font-size: 1.4rem; font-weight: 700; display: block; }
+  .stat .label { font-size: 0.75rem; opacity: 0.7; }
+  .progress-bar { background: #8883; border-radius: 6px; overflow: hidden; height: 18px; width: 100%; }
+  .progress-fill { background: #2a7; height: 100%; text-align: center; font-size: 0.7rem; color: white; line-height: 18px; white-space: nowrap; }
+  .batch-block { margin-bottom: 1.25rem; }
+  .muted { opacity: 0.6; font-size: 0.8rem; }
+</style>
+
+<h1>Distributed Inference Network</h1>
+<div class="summary" id="summary"></div>
+
+<h2>Active Batches</h2>
+<div id="batches"></div>
+
+<h2>Nodes</h2>
+<table id="nodes-table">
+  <thead>
+    <tr>
+      <th>Name</th><th>Status</th><th>Jobs Done</th><th>Failed</th>
+      <th>Tok/s</th><th>Failure %</th><th>Mismatches</th><th>Uptime %</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<p class="muted">Polling /stats every 5s.</p>
+
+<script>
+async function refresh() {
+  let res;
+  try {
+    res = await fetch("/stats");
+  } catch (e) {
+    return;
+  }
+  if (!res.ok) return;
+  const data = await res.json();
+
+  document.getElementById("summary").innerHTML = `
+    <div class="stat"><span class="value">${data.aggregate_tokens_per_sec.toFixed(1)}</span><span class="label">tokens/sec (network)</span></div>
+    <div class="stat"><span class="value">${data.nodes.filter(n => n.status !== 'offline').length} / ${data.nodes.length}</span><span class="label">nodes online</span></div>
+    <div class="stat"><span class="value">${data.cumulative_payout.toFixed(6)}</span><span class="label">cumulative simulated payout</span></div>
+  `;
+
+  const batchesEl = document.getElementById("batches");
+  if (data.batches.length === 0) {
+    batchesEl.innerHTML = '<p class="muted">No batches submitted yet.</p>';
+  } else {
+    batchesEl.innerHTML = data.batches.map(b => {
+      const done = b.completed + b.verified + b.mismatched + b.failed;
+      const pct = b.total_jobs ? Math.round((done / b.total_jobs) * 100) : 0;
+      const eta = b.eta_seconds === null ? "?" : `${Math.round(b.eta_seconds)}s`;
+      return `
+        <div class="batch-block">
+          <div><b>${b.batch_id.slice(0, 8)}</b> (${b.model_name}) &mdash;
+            ${done}/${b.total_jobs} done, ${b.retry_count} retries, ETA ${eta}, ${b.throughput_tokens_per_sec.toFixed(1)} tok/s</div>
+          <div class="progress-bar"><div class="progress-fill" style="width:${pct}%">${pct}%</div></div>
+        </div>`;
+    }).join("");
+  }
+
+  const tbody = document.querySelector("#nodes-table tbody");
+  tbody.innerHTML = data.nodes.map(n => `
+    <tr>
+      <td>${n.name}</td>
+      <td class="status-${n.status}">${n.status}</td>
+      <td>${n.jobs_done}</td>
+      <td>${n.jobs_failed}</td>
+      <td>${n.tokens_per_sec_avg.toFixed(1)}</td>
+      <td>${(n.failure_rate * 100).toFixed(1)}</td>
+      <td>${n.mismatch_count}</td>
+      <td>${n.uptime_pct.toFixed(0)}</td>
+    </tr>`).join("");
+}
+
+refresh();
+setInterval(refresh, 5000);
+</script>

@@ -1,0 +1,74 @@
+# Spins up the coordinator plus 3 fake local agents, all pointed at the same
+# Ollama instance running on the host machine, so the whole system can be
+# demoed on one laptop before real contributor devices join.
+#
+# Before running: `ollama pull ${DEMO_MODEL:-llama3.2:1b}` on the HOST (not
+# in a container) and make sure `ollama serve` is running on localhost:11434.
+
+services:
+  coordinator:
+    build:
+      context: .
+      dockerfile: Dockerfile.coordinator
+    ports:
+      - "8000:8000"
+    environment:
+      COORDINATOR_DB_PATH: /data/coordinator.db
+      COORDINATOR_HEARTBEAT_TIMEOUT_S: "90"
+      COORDINATOR_DEFAULT_VERIFICATION_PCT: "0.2"
+    volumes:
+      - coordinator_data:/data
+
+  agent1:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    depends_on:
+      - coordinator
+    environment:
+      AGENT_NODE_NAME: agent1
+      AGENT_COORDINATOR_URL: http://coordinator:8000
+      AGENT_MODEL_NAME: ${DEMO_MODEL:-llama3.2:1b}
+      AGENT_OLLAMA_URL: http://host.docker.internal:11434
+      AGENT_HARDWARE: "fake-agent-1 (docker demo)"
+      AGENT_CITY: "Toronto"
+      AGENT_COUNTRY: "CA"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  agent2:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    depends_on:
+      - coordinator
+    environment:
+      AGENT_NODE_NAME: agent2
+      AGENT_COORDINATOR_URL: http://coordinator:8000
+      AGENT_MODEL_NAME: ${DEMO_MODEL:-llama3.2:1b}
+      AGENT_OLLAMA_URL: http://host.docker.internal:11434
+      AGENT_HARDWARE: "fake-agent-2 (docker demo)"
+      AGENT_CITY: "Berlin"
+      AGENT_COUNTRY: "DE"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  agent3:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    depends_on:
+      - coordinator
+    environment:
+      AGENT_NODE_NAME: agent3
+      AGENT_COORDINATOR_URL: http://coordinator:8000
+      AGENT_MODEL_NAME: ${DEMO_MODEL:-llama3.2:1b}
+      AGENT_OLLAMA_URL: http://host.docker.internal:11434
+      AGENT_HARDWARE: "fake-agent-3 (docker demo)"
+      AGENT_CITY: "Nairobi"
+      AGENT_COUNTRY: "KE"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  coordinator_data:
