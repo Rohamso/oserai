@@ -83,3 +83,70 @@ class CoordinatorClient:
 
     def close(self) -> None:
         self._client.close()
+
+    # ------------------------------------------------------------------ #
+    # training (DiLoCo) -- heartbeat()/deregister() above are reused as-is,
+    # they have no inference-specific assumptions.
+    # ------------------------------------------------------------------ #
+
+    def register_training(self, payload: dict[str, Any]) -> tuple[str, str]:
+        resp = self._request_with_backoff("POST", "/training/nodes/register", json=payload)
+        data = resp.json()
+        self.node_id, self.token = data["node_id"], data["token"]
+        return self.node_id, self.token
+
+    def get_run(self, run_id: str) -> dict[str, Any]:
+        resp = self._request_with_backoff("GET", f"/training/runs/{run_id}")
+        return resp.json()
+
+    def get_current_round(self, run_id: str) -> Optional[dict[str, Any]]:
+        """Returns the current round payload, or None if the run hasn't
+        started yet. Raises httpx.HTTPError if the coordinator is unreachable,
+        so callers can back off the same way next_job() does."""
+        resp = self._client.request(
+            "GET", f"{self.base_url}/training/runs/{run_id}/round/current",
+            headers=self._headers(), params={"node_id": self.node_id},
+        )
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return resp.json()
+
+    def download_checkpoint(self, checkpoint_id: str) -> bytes:
+        resp = self._client.request(
+            "GET", f"{self.base_url}/training/checkpoints/{checkpoint_id}",
+            headers=self._headers(), params={"node_id": self.node_id},
+        )
+        resp.raise_for_status()
+        return resp.content
+
+    def upload_delta(
+        self, round_id: str, blob: bytes,
+        local_loss: float, local_steps_completed: int, wall_time_s: float,
+    ) -> Optional[dict[str, Any]]:
+        """Retries transient failures with backoff, like post_result() --
+        a completed round of local training must not silently get lost.
+        A 409 means the round already closed server-side (deadline passed
+        while this node was still training); that's not transient, so it
+        returns None instead of retrying forever."""
+        delay = 1.0
+        while True:
+            try:
+                resp = self._client.request(
+                    "POST", f"{self.base_url}/training/rounds/{round_id}/delta",
+                    headers=self._headers(),
+                    params={
+                        "node_id": self.node_id, "local_loss": local_loss,
+                        "local_steps_completed": local_steps_completed, "wall_time_s": wall_time_s,
+                    },
+                    content=blob,
+                )
+                if resp.status_code == 409:
+                    logger.warning(f"round {round_id} already closed; discarding this delta")
+                    return None
+                resp.raise_for_status()
+                return resp.json()
+            except httpx.HTTPError as exc:
+                logger.warning(f"delta upload failed ({exc}); retrying in {delay:.0f}s")
+                time.sleep(delay)
+                delay = min(delay * 2, self.backoff_cap_s)

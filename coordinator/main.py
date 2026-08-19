@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Header, HTTPException, Response
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
 from common.logging_setup import log_event, setup_logging
@@ -34,10 +34,35 @@ from coordinator.models import (
 )
 from coordinator.stats import compute_batch_progress, compute_node_stats
 
+try:
+    import torch
+
+    from coordinator.models import (
+        GenerateRequest,
+        GenerateResponse,
+        TrainingDeltaSubmitResponse,
+        TrainingNodeRegisterRequest,
+        TrainingRoundOut,
+        TrainingRunCreateRequest,
+        TrainingRunCreateResponse,
+        TrainingRunOut,
+    )
+    from coordinator.training_dispatch import run_training_cycle, start_run, submit_delta
+    from training.checkpoint_io import bytes_to_state_dict, state_dict_to_bytes
+    from training.config import GPTConfig
+    from training.dataset import CHAT_DATASETS, CHAT_TEMPLATE, DATASET_NAMES, VOCAB_SIZE, eot_token_id, get_encoder
+    from training.model import GPT
+
+    TRAINING_AVAILABLE = True
+except ImportError:
+    TRAINING_AVAILABLE = False
+
 STATIC_DIR = Path(__file__).parent / "static"
 
 config = CoordinatorConfig.load()
 logger = setup_logging("coordinator", level=getattr(logging, config.log_level, logging.INFO))
+if not TRAINING_AVAILABLE:
+    logger.warning("torch not installed -- /training/* routes disabled (see requirements-training.txt)")
 
 db: Database  # assigned in lifespan startup
 
@@ -46,6 +71,8 @@ async def _dispatch_loop(stop_event: asyncio.Event) -> None:
     while not stop_event.is_set():
         try:
             await asyncio.to_thread(run_dispatch_cycle, db, config)
+            if TRAINING_AVAILABLE:
+                await asyncio.to_thread(run_training_cycle, db)
         except Exception:
             logger.exception("dispatch cycle failed")
         try:
@@ -204,3 +231,168 @@ def stats() -> StatsResponse:
 @app.get("/", response_class=HTMLResponse)
 def dashboard() -> str:
     return (STATIC_DIR / "dashboard.html").read_text()
+
+
+# ---------------------------------------------------------------------- #
+# training (DiLoCo) -- only registered if torch is installed
+# ---------------------------------------------------------------------- #
+
+if TRAINING_AVAILABLE:
+
+    def _training_run_to_out(run: dict) -> TrainingRunOut:
+        return TrainingRunOut(**run)
+
+    @app.post("/training/nodes/register", response_model=NodeRegisterResponse)
+    def register_training_node(req: TrainingNodeRegisterRequest) -> NodeRegisterResponse:
+        token = secrets.token_hex(16)
+        node_id = db.register_node(
+            name=req.name, token=token, city=req.city, country=req.country,
+            hardware=req.hardware, model_name="training", max_concurrent_jobs=1,
+            measured_watts=None, grid_zone=None, role="training",
+        )
+        log_event(logger, "training_node_registered", node_id=node_id, name=req.name)
+        return NodeRegisterResponse(node_id=node_id, token=token)
+
+    @app.post("/training/runs", response_model=TrainingRunCreateResponse)
+    def create_training_run(req: TrainingRunCreateRequest) -> TrainingRunCreateResponse:
+        if req.dataset_name not in DATASET_NAMES:
+            raise HTTPException(status_code=400, detail=f"unknown dataset_name, expected one of {sorted(DATASET_NAMES)}")
+
+        if req.init_from_run_id:
+            source = db.get_training_run(req.init_from_run_id)
+            if source is None:
+                raise HTTPException(status_code=404, detail="unknown init_from_run_id")
+            if not source["latest_checkpoint_id"]:
+                raise HTTPException(status_code=400, detail="init_from_run_id run has no checkpoint yet")
+            source_shape = (source["n_layer"], source["n_head"], source["n_embd"], source["block_size"])
+            req_shape = (req.n_layer, req.n_head, req.n_embd, req.block_size)
+            if source_shape != req_shape:
+                raise HTTPException(
+                    status_code=400,
+                    detail="init_from_run_id model shape does not match this run's n_layer/n_head/n_embd/block_size",
+                )
+            initial_state_bytes = db.get_checkpoint_blob(source["latest_checkpoint_id"])
+        else:
+            torch.manual_seed(1337)  # every node must start round 0 from the identical initialization
+            model = GPT(GPTConfig(
+                vocab_size=VOCAB_SIZE, block_size=req.block_size,
+                n_layer=req.n_layer, n_head=req.n_head, n_embd=req.n_embd,
+            ))
+            initial_state_bytes = state_dict_to_bytes(model.state_dict())
+
+        run_id = db.create_training_run(
+            name=req.name, n_layer=req.n_layer, n_head=req.n_head, n_embd=req.n_embd,
+            block_size=req.block_size, vocab_size=VOCAB_SIZE, dataset_name=req.dataset_name,
+            inner_lr=req.inner_lr, inner_steps_h=req.inner_steps_h, inner_batch_size=req.inner_batch_size,
+            outer_lr=req.outer_lr, outer_momentum=req.outer_momentum, max_rounds=req.max_rounds,
+            round_timeout_s=req.round_timeout_s, quorum=req.quorum,
+        )
+        checkpoint_id = db.save_checkpoint(run_id, "global_weights", initial_state_bytes, round_num=0)
+        db.advance_run_round(run_id, 0, checkpoint_id, None)
+        log_event(logger, "training_run_created", run_id=run_id, name=req.name)
+        return TrainingRunCreateResponse(run_id=run_id)
+
+    @app.post("/training/runs/{run_id}/start")
+    def start_training_run(run_id: str) -> dict:
+        try:
+            start_run(db, run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"ok": True}
+
+    @app.get("/training/runs", response_model=list[TrainingRunOut])
+    def list_training_runs() -> list[TrainingRunOut]:
+        return [_training_run_to_out(r) for r in db.list_training_runs()]
+
+    @app.get("/training/runs/{run_id}", response_model=TrainingRunOut)
+    def get_training_run(run_id: str) -> TrainingRunOut:
+        run = db.get_training_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="unknown run")
+        return _training_run_to_out(run)
+
+    @app.get("/training/runs/{run_id}/round/current", response_model=TrainingRoundOut)
+    def get_current_training_round(
+        run_id: str, node_id: str, authorization: Optional[str] = Header(None),
+    ) -> TrainingRoundOut:
+        _auth_node(node_id, authorization)
+        run = db.get_training_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="unknown run")
+        round_row = db.get_current_round(run_id)
+        if round_row is None:
+            raise HTTPException(status_code=404, detail="run has not started")
+        already = any(d["node_id"] == node_id for d in db.list_deltas_for_round(round_row["id"]))
+        return TrainingRoundOut(
+            round_id=round_row["id"], round_num=round_row["round_num"], status=round_row["status"],
+            base_checkpoint_id=round_row["base_checkpoint_id"], deadline_at=round_row["deadline_at"],
+            already_submitted=already, inner_steps_h=run["inner_steps_h"], inner_lr=run["inner_lr"],
+            inner_batch_size=run["inner_batch_size"], block_size=run["block_size"],
+        )
+
+    @app.get("/training/checkpoints/{checkpoint_id}")
+    def download_checkpoint(
+        checkpoint_id: str, node_id: str, authorization: Optional[str] = Header(None),
+    ) -> Response:
+        _auth_node(node_id, authorization)
+        blob = db.get_checkpoint_blob(checkpoint_id)
+        if blob is None:
+            raise HTTPException(status_code=404, detail="unknown checkpoint")
+        return Response(content=blob, media_type="application/octet-stream")
+
+    @app.post("/training/rounds/{round_id}/delta", response_model=TrainingDeltaSubmitResponse)
+    async def upload_delta(
+        round_id: str,
+        request: Request,
+        node_id: str,
+        local_loss: Optional[float] = None,
+        local_steps_completed: Optional[int] = None,
+        wall_time_s: Optional[float] = None,
+        authorization: Optional[str] = Header(None),
+    ) -> TrainingDeltaSubmitResponse:
+        _auth_node(node_id, authorization)
+        blob = await request.body()
+        try:
+            result = submit_delta(
+                db, round_id, node_id, blob, local_loss, local_steps_completed, wall_time_s,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        return TrainingDeltaSubmitResponse(ok=True, inserted=result["inserted"])
+
+    @app.post("/training/runs/{run_id}/generate", response_model=GenerateResponse)
+    def generate_from_run(run_id: str, req: GenerateRequest) -> GenerateResponse:
+        run = db.get_training_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="unknown run")
+        if not run["latest_checkpoint_id"]:
+            raise HTTPException(status_code=400, detail="run has no checkpoint yet")
+
+        gpt_config = GPTConfig(
+            vocab_size=run["vocab_size"], block_size=run["block_size"],
+            n_layer=run["n_layer"], n_head=run["n_head"], n_embd=run["n_embd"],
+        )
+        model = GPT(gpt_config)
+        model.load_state_dict(bytes_to_state_dict(db.get_checkpoint_blob(run["latest_checkpoint_id"])))
+
+        encoder = get_encoder()
+        is_chat = run["dataset_name"] in CHAT_DATASETS
+        prompt_text = CHAT_TEMPLATE.format(instruction=req.prompt) if is_chat else req.prompt
+        encoded = encoder.encode(prompt_text, allowed_special={"<|endoftext|>"})
+
+        idx = torch.tensor([encoded], dtype=torch.long)
+        stop_id = eot_token_id() if is_chat else None
+        out = model.generate(
+            idx, max_new_tokens=req.max_new_tokens, temperature=req.temperature, stop_token_id=stop_id,
+        )
+
+        if is_chat:
+            # Chat runs: return only the generated response, trimmed of the
+            # instruction template and the trailing stop token.
+            new_tokens = out[0, len(encoded):].tolist()
+            if new_tokens and new_tokens[-1] == stop_id:
+                new_tokens = new_tokens[:-1]
+            return GenerateResponse(text=encoder.decode(new_tokens))
+
+        # Base/pretrain runs: raw completion, prompt included, same as before.
+        return GenerateResponse(text=encoder.decode(out[0].tolist()))

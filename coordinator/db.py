@@ -16,6 +16,8 @@ import time
 import uuid
 from typing import Any, Optional
 
+from common.hashing import sha256_bytes
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS nodes (
     id                  TEXT PRIMARY KEY,
@@ -25,6 +27,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     country              TEXT,
     hardware            TEXT,
     model_name          TEXT NOT NULL,
+    role                TEXT NOT NULL DEFAULT 'inference',
     max_concurrent_jobs INTEGER NOT NULL DEFAULT 1,
     measured_watts      REAL,
     grid_zone           TEXT,
@@ -101,6 +104,72 @@ CREATE INDEX IF NOT EXISTS idx_jobs_assigned ON jobs(assigned_node_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_verification_group ON jobs(verification_group_id);
 CREATE INDEX IF NOT EXISTS idx_job_events_job ON job_events(job_id);
 CREATE INDEX IF NOT EXISTS idx_ledger_node ON ledger(node_id);
+
+CREATE TABLE IF NOT EXISTS training_runs (
+    id                        TEXT PRIMARY KEY,
+    name                      TEXT NOT NULL,
+    status                    TEXT NOT NULL DEFAULT 'pending',
+    n_layer                   INTEGER NOT NULL,
+    n_head                    INTEGER NOT NULL,
+    n_embd                    INTEGER NOT NULL,
+    block_size                INTEGER NOT NULL,
+    vocab_size                INTEGER NOT NULL,
+    dataset_name              TEXT NOT NULL,
+    inner_lr                  REAL NOT NULL,
+    inner_steps_h             INTEGER NOT NULL,
+    inner_batch_size          INTEGER NOT NULL,
+    outer_lr                  REAL NOT NULL,
+    outer_momentum            REAL NOT NULL,
+    max_rounds                INTEGER NOT NULL,
+    round_timeout_s           INTEGER NOT NULL,
+    quorum                    INTEGER NOT NULL DEFAULT 1,
+    current_round             INTEGER NOT NULL DEFAULT 0,
+    created_at                REAL NOT NULL,
+    completed_at              REAL,
+    latest_checkpoint_id      TEXT,
+    outer_state_checkpoint_id TEXT
+);
+
+CREATE TABLE IF NOT EXISTS training_rounds (
+    id                   TEXT PRIMARY KEY,
+    run_id               TEXT NOT NULL REFERENCES training_runs(id),
+    round_num            INTEGER NOT NULL,
+    status               TEXT NOT NULL DEFAULT 'open',
+    base_checkpoint_id   TEXT NOT NULL,
+    result_checkpoint_id TEXT,
+    opened_at            REAL NOT NULL,
+    deadline_at          REAL NOT NULL,
+    closed_at            REAL,
+    participant_count    INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS training_deltas (
+    id                    TEXT PRIMARY KEY,
+    round_id              TEXT NOT NULL REFERENCES training_rounds(id),
+    node_id               TEXT NOT NULL REFERENCES nodes(id),
+    checkpoint_id         TEXT NOT NULL,
+    local_loss            REAL,
+    local_steps_completed INTEGER,
+    wall_time_s           REAL,
+    submitted_at          REAL NOT NULL,
+    UNIQUE(round_id, node_id)
+);
+
+CREATE TABLE IF NOT EXISTS checkpoints (
+    id         TEXT PRIMARY KEY,
+    run_id     TEXT NOT NULL REFERENCES training_runs(id),
+    kind       TEXT NOT NULL,
+    round_num  INTEGER,
+    node_id    TEXT,
+    sha256     TEXT NOT NULL,
+    byte_size  INTEGER NOT NULL,
+    created_at REAL NOT NULL,
+    blob       BLOB NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_training_rounds_run ON training_rounds(run_id);
+CREATE INDEX IF NOT EXISTS idx_training_deltas_round ON training_deltas(round_id);
+CREATE INDEX IF NOT EXISTS idx_checkpoints_run ON checkpoints(run_id);
 """
 
 
@@ -150,18 +219,19 @@ class Database:
         max_concurrent_jobs: int,
         measured_watts: Optional[float],
         grid_zone: Optional[str],
+        role: str = "inference",
     ) -> str:
         node_id = str(uuid.uuid4())
         now = time.time()
         with self._lock:
             self._conn.execute(
                 """INSERT INTO nodes
-                   (id, name, token, city, country, hardware, model_name,
+                   (id, name, token, city, country, hardware, model_name, role,
                     max_concurrent_jobs, measured_watts, grid_zone, status,
                     last_heartbeat, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)""",
                 (
-                    node_id, name, token, city, country, hardware, model_name,
+                    node_id, name, token, city, country, hardware, model_name, role,
                     max_concurrent_jobs, measured_watts, grid_zone, now, now,
                 ),
             )
@@ -184,6 +254,11 @@ class Database:
                 "SELECT * FROM nodes WHERE status = ? AND model_name = ?",
                 (status, model_name),
             )
+            return _rows(cur.fetchall())
+
+    def list_nodes_by_role(self, role: str) -> list[dict[str, Any]]:
+        with self._lock:
+            cur = self._conn.execute("SELECT * FROM nodes WHERE role = ? ORDER BY created_at", (role,))
             return _rows(cur.fetchall())
 
     def update_heartbeat(self, node_id: str, status: str, cpu_pct: float, ram_free_mb: float) -> None:
@@ -475,3 +550,169 @@ class Database:
         with self._lock:
             cur = self._conn.execute("SELECT COALESCE(SUM(payout), 0) AS total FROM ledger")
             return cur.fetchone()["total"]
+
+    # ------------------------------------------------------------------ #
+    # training runs / rounds / deltas / checkpoints (DiLoCo)
+    #
+    # This module never imports torch -- checkpoints.blob is opaque bytes
+    # to everything here, encoded/decoded only by training/checkpoint_io.py.
+    # ------------------------------------------------------------------ #
+
+    def create_training_run(
+        self, name: str, n_layer: int, n_head: int, n_embd: int, block_size: int,
+        vocab_size: int, dataset_name: str, inner_lr: float, inner_steps_h: int,
+        inner_batch_size: int, outer_lr: float, outer_momentum: float,
+        max_rounds: int, round_timeout_s: int, quorum: int,
+    ) -> str:
+        run_id = str(uuid.uuid4())
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO training_runs
+                   (id, name, status, n_layer, n_head, n_embd, block_size, vocab_size,
+                    dataset_name, inner_lr, inner_steps_h, inner_batch_size, outer_lr,
+                    outer_momentum, max_rounds, round_timeout_s, quorum, created_at)
+                   VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    run_id, name, n_layer, n_head, n_embd, block_size, vocab_size,
+                    dataset_name, inner_lr, inner_steps_h, inner_batch_size, outer_lr,
+                    outer_momentum, max_rounds, round_timeout_s, quorum, time.time(),
+                ),
+            )
+            self._conn.commit()
+        return run_id
+
+    def get_training_run(self, run_id: str) -> Optional[dict[str, Any]]:
+        with self._lock:
+            cur = self._conn.execute("SELECT * FROM training_runs WHERE id = ?", (run_id,))
+            return _row(cur.fetchone())
+
+    def list_training_runs(self) -> list[dict[str, Any]]:
+        with self._lock:
+            cur = self._conn.execute("SELECT * FROM training_runs ORDER BY created_at DESC")
+            return _rows(cur.fetchall())
+
+    def set_run_status(self, run_id: str, status: str, completed_at: Optional[float] = None) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE training_runs SET status = ?, completed_at = ? WHERE id = ?",
+                (status, completed_at, run_id),
+            )
+            self._conn.commit()
+
+    def advance_run_round(
+        self, run_id: str, current_round: int,
+        latest_checkpoint_id: str, outer_state_checkpoint_id: str,
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                """UPDATE training_runs
+                   SET current_round = ?, latest_checkpoint_id = ?, outer_state_checkpoint_id = ?
+                   WHERE id = ?""",
+                (current_round, latest_checkpoint_id, outer_state_checkpoint_id, run_id),
+            )
+            self._conn.commit()
+
+    def create_training_round(
+        self, run_id: str, round_num: int, base_checkpoint_id: str, deadline_at: float,
+    ) -> str:
+        round_id = str(uuid.uuid4())
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO training_rounds
+                   (id, run_id, round_num, status, base_checkpoint_id, opened_at, deadline_at)
+                   VALUES (?, ?, ?, 'open', ?, ?, ?)""",
+                (round_id, run_id, round_num, base_checkpoint_id, time.time(), deadline_at),
+            )
+            self._conn.commit()
+        return round_id
+
+    def get_round(self, round_id: str) -> Optional[dict[str, Any]]:
+        with self._lock:
+            cur = self._conn.execute("SELECT * FROM training_rounds WHERE id = ?", (round_id,))
+            return _row(cur.fetchone())
+
+    def get_current_round(self, run_id: str) -> Optional[dict[str, Any]]:
+        """Most recently opened round for a run, regardless of status -- callers
+        check `status` themselves (an agent polling mid-aggregation just waits)."""
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT * FROM training_rounds WHERE run_id = ? ORDER BY round_num DESC LIMIT 1",
+                (run_id,),
+            )
+            return _row(cur.fetchone())
+
+    def list_rounds_by_status(self, status: str) -> list[dict[str, Any]]:
+        with self._lock:
+            cur = self._conn.execute("SELECT * FROM training_rounds WHERE status = ?", (status,))
+            return _rows(cur.fetchall())
+
+    def set_round_status(
+        self, round_id: str, status: str,
+        result_checkpoint_id: Optional[str] = None, participant_count: Optional[int] = None,
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                """UPDATE training_rounds SET status = ?,
+                       result_checkpoint_id = COALESCE(?, result_checkpoint_id),
+                       participant_count = COALESCE(?, participant_count),
+                       closed_at = ?
+                   WHERE id = ?""",
+                (status, result_checkpoint_id, participant_count, time.time(), round_id),
+            )
+            self._conn.commit()
+
+    def record_delta(
+        self, round_id: str, node_id: str, checkpoint_id: str,
+        local_loss: Optional[float], local_steps_completed: Optional[int], wall_time_s: Optional[float],
+    ) -> bool:
+        """Idempotent: a retried upload from a node that lost the HTTP response
+        but whose delta already landed is silently ignored. Returns True if this
+        call actually inserted a new row."""
+        delta_id = str(uuid.uuid4())
+        with self._lock:
+            cur = self._conn.execute(
+                """INSERT OR IGNORE INTO training_deltas
+                   (id, round_id, node_id, checkpoint_id, local_loss,
+                    local_steps_completed, wall_time_s, submitted_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (delta_id, round_id, node_id, checkpoint_id, local_loss,
+                 local_steps_completed, wall_time_s, time.time()),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def list_deltas_for_round(self, round_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            cur = self._conn.execute("SELECT * FROM training_deltas WHERE round_id = ?", (round_id,))
+            return _rows(cur.fetchall())
+
+    def save_checkpoint(
+        self, run_id: str, kind: str, blob: bytes,
+        round_num: Optional[int] = None, node_id: Optional[str] = None,
+    ) -> str:
+        checkpoint_id = str(uuid.uuid4())
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO checkpoints
+                   (id, run_id, kind, round_num, node_id, sha256, byte_size, created_at, blob)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (checkpoint_id, run_id, kind, round_num, node_id,
+                 sha256_bytes(blob), len(blob), time.time(), blob),
+            )
+            self._conn.commit()
+        return checkpoint_id
+
+    def get_checkpoint_blob(self, checkpoint_id: str) -> Optional[bytes]:
+        with self._lock:
+            cur = self._conn.execute("SELECT blob FROM checkpoints WHERE id = ?", (checkpoint_id,))
+            row = cur.fetchone()
+            return row["blob"] if row is not None else None
+
+    def get_checkpoint_meta(self, checkpoint_id: str) -> Optional[dict[str, Any]]:
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT id, run_id, kind, round_num, node_id, sha256, byte_size, created_at "
+                "FROM checkpoints WHERE id = ?",
+                (checkpoint_id,),
+            )
+            return _row(cur.fetchone())

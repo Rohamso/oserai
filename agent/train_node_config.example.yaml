@@ -1,0 +1,24 @@
+# Copy to train_node_config.yaml on each of your GPU machines and edit.
+# Each machine needs a unique shard_index (0, 1, ... one per known training
+# machine) -- there's no auto-discovery, since this PoC targets exactly the
+# handful of machines you actually have.
+
+node_name: "gaming-pc-1"
+coordinator_url: "http://localhost:8000"
+run_id: "REPLACE_WITH_RUN_ID_FROM_POST_/training/runs"
+shard_index: 0
+num_shards: 2
+
+device: "cuda"  # "cuda" | "mps" | "cpu" -- match what this machine actually has
+
+location:
+  city: "Toronto"
+  country: "CA"
+
+hardware: "RTX 4080 16GB, Ryzen 7 7800X3D, 32GB RAM"
+
+# Optional, all have sane defaults:
+# heartbeat_interval_s: 30
+# poll_interval_s: 5
+# poll_backoff_cap_s: 300
+# state_path: ".train_node_state.json"

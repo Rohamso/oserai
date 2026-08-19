@@ -31,14 +31,20 @@
 <table id="nodes-table">
   <thead>
     <tr>
-      <th>Name</th><th>Status</th><th>Jobs Done</th><th>Failed</th>
+      <th>Name</th><th>Role</th><th>Status</th><th>Jobs Done</th><th>Failed</th>
       <th>Tok/s</th><th>Failure %</th><th>Mismatches</th><th>Uptime %</th>
     </tr>
   </thead>
   <tbody></tbody>
 </table>
 
-<p class="muted">Polling /stats every 5s.</p>
+<h2>Training Runs</h2>
+<div id="training-runs"></div>
+
+<h2>Talk to a trained run</h2>
+<div id="generate-panel" class="muted">No completed-or-in-progress run yet.</div>
+
+<p class="muted">Polling /stats every 5s, /training/runs every 5s.</p>
 
 <script>
 async function refresh() {
@@ -78,6 +84,7 @@ async function refresh() {
   tbody.innerHTML = data.nodes.map(n => `
     <tr>
       <td>${n.name}</td>
+      <td>${n.role}</td>
       <td class="status-${n.status}">${n.status}</td>
       <td>${n.jobs_done}</td>
       <td>${n.jobs_failed}</td>
@@ -88,6 +95,70 @@ async function refresh() {
     </tr>`).join("");
 }
 
+async function refreshTraining() {
+  let res;
+  try {
+    res = await fetch("/training/runs");
+  } catch (e) {
+    return; // torch not installed on this coordinator -- route doesn't exist, stay quiet
+  }
+  if (!res.ok) return;
+  const runs = await res.json();
+
+  const runsEl = document.getElementById("training-runs");
+  if (runs.length === 0) {
+    runsEl.innerHTML = '<p class="muted">No training runs yet. POST /training/runs to start one.</p>';
+  } else {
+    runsEl.innerHTML = runs.map(r => {
+      const pct = r.max_rounds ? Math.min(100, Math.round((r.current_round / r.max_rounds) * 100)) : 0;
+      return `
+        <div class="batch-block">
+          <div><b>${r.name}</b> (${r.id.slice(0, 8)}) &mdash;
+            ${r.status}, round ${r.current_round}/${r.max_rounds}, dataset ${r.dataset_name}</div>
+          <div class="progress-bar"><div class="progress-fill" style="width:${pct}%">${pct}%</div></div>
+        </div>`;
+    }).join("");
+  }
+
+  const genPanel = document.getElementById("generate-panel");
+  const usableRuns = runs.filter(r => r.latest_checkpoint_id);
+  if (usableRuns.length === 0) {
+    genPanel.innerHTML = '<p class="muted">No completed-or-in-progress run yet.</p>';
+    return;
+  }
+  if (!genPanel.dataset.built) {
+    genPanel.innerHTML = `
+      <select id="gen-run"></select>
+      <p class="muted" style="margin:0.25rem 0;">dolly_chat runs: type a question/instruction, answered chat-style.
+        Other runs: raw text completion.</p>
+      <textarea id="gen-prompt" rows="2" style="width:100%;" placeholder="Prompt or question"></textarea>
+      <button id="gen-button" style="margin-top:0.5rem;">Generate</button>
+      <pre id="gen-output" class="muted" style="white-space:pre-wrap;margin-top:0.5rem;"></pre>
+    `;
+    document.getElementById("gen-button").addEventListener("click", async () => {
+      const runId = document.getElementById("gen-run").value;
+      const prompt = document.getElementById("gen-prompt").value;
+      const out = document.getElementById("gen-output");
+      out.textContent = "generating...";
+      try {
+        const r = await fetch(`/training/runs/${runId}/generate`, {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({prompt, max_new_tokens: 300, temperature: 0.8}),
+        });
+        const body = await r.json();
+        out.textContent = r.ok ? body.text : `error: ${body.detail}`;
+      } catch (e) {
+        out.textContent = `error: ${e}`;
+      }
+    });
+    genPanel.dataset.built = "1";
+  }
+  const select = document.getElementById("gen-run");
+  select.innerHTML = usableRuns.map(r => `<option value="${r.id}">${r.name} [${r.dataset_name}] (${r.status}, round ${r.current_round})</option>`).join("");
+}
+
 refresh();
+refreshTraining();
 setInterval(refresh, 5000);
+setInterval(refreshTraining, 5000);
 </script>

@@ -73,6 +73,7 @@ def compute_node_stats(node: dict[str, Any], heartbeat_timeout_s: int) -> dict[s
     return {
         "node_id": node["id"],
         "name": node["name"],
+        "role": node["role"],
         "status": node["status"],
         "jobs_done": jobs_done,
         "jobs_failed": jobs_failed,

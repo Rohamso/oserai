@@ -20,10 +20,12 @@ import sys
 import httpx
 
 
-def pick_target(coordinator_url: str) -> str | None:
+def pick_target(coordinator_url: str, role: str | None = None) -> str | None:
     resp = httpx.get(f"{coordinator_url}/nodes", timeout=10)
     resp.raise_for_status()
     live = [n for n in resp.json() if n["status"] in ("idle", "busy")]
+    if role:
+        live = [n for n in live if n["role"] == role]
     if not live:
         return None
     return random.choice(live)["name"]
@@ -34,16 +36,25 @@ def main() -> None:
     parser.add_argument("--coordinator-url", default="http://localhost:8000")
     parser.add_argument("--compose-file", default="docker-compose.yaml")
     parser.add_argument("--list", action="store_true", help="print live nodes and exit")
+    parser.add_argument(
+        "--role", choices=["inference", "training"], default=None,
+        help="filter to one node role. Note: killing only works for docker-compose "
+             "(inference) nodes -- training nodes run on real hardware, so for those "
+             "just Ctrl-C/kill the agent process yourself; --role training here is "
+             "only useful with --list.",
+    )
     args = parser.parse_args()
 
     if args.list:
         resp = httpx.get(f"{args.coordinator_url}/nodes", timeout=10)
         resp.raise_for_status()
         for n in resp.json():
-            print(f"{n['name']:20} status={n['status']:8} jobs_done={n['jobs_done']}")
+            if args.role and n["role"] != args.role:
+                continue
+            print(f"{n['name']:20} role={n['role']:10} status={n['status']:8} jobs_done={n['jobs_done']}")
         return
 
-    target = pick_target(args.coordinator_url)
+    target = pick_target(args.coordinator_url, role=args.role)
     if target is None:
         print("no live nodes to kill")
         sys.exit(1)

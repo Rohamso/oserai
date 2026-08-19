@@ -8,3 +8,9 @@ __pycache__/
 node_config.yaml
 test_batch.jsonl
 .DS_Store
+out/
+.train_node_state.json
+train_node_config.yaml
+*.pt
+training/data/tinystories.txt
+training/data/dolly15k_chat.txt
