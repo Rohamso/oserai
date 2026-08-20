@@ -40,8 +40,32 @@ def make_run(db: Database, round_timeout_s: int = 600, quorum: int = 1, max_roun
     return run_id
 
 
+def make_lora_run(db: Database, round_timeout_s: int = 600, quorum: int = 1, max_rounds: int = 5) -> str:
+    """Same shape as make_run, but exercises the lora_* model_backend and its
+    nullable n_layer/n_head/n_embd/block_size + LoRA-specific columns --
+    dispatch/aggregation logic is backend-agnostic (operates on whatever
+    tensors are in the checkpoint blob), so no real base model is needed to
+    verify the round lifecycle works for this backend too."""
+    run_id = db.create_training_run(
+        name="lora-test-run", vocab_size=151936, dataset_name="dolly_chat",
+        inner_lr=1e-4, inner_steps_h=3, inner_batch_size=2,
+        outer_lr=0.7, outer_momentum=0.9, max_rounds=max_rounds,
+        round_timeout_s=round_timeout_s, quorum=quorum,
+        model_backend="lora_qwen2.5-1.5b", base_model_id="Qwen/Qwen2.5-1.5B-Instruct",
+        lora_r=16, lora_alpha=32, lora_dropout=0.05, lora_target_modules="q_proj,k_proj,v_proj,o_proj",
+    )
+    initial_adapter = {"lora_A.weight": torch.tensor([1.0, 2.0]), "lora_B.weight": torch.tensor([0.0, 0.0])}
+    checkpoint_id = db.save_checkpoint(run_id, "global_weights", state_dict_to_bytes(initial_adapter), round_num=0)
+    db.advance_run_round(run_id, 0, checkpoint_id, None)
+    return run_id
+
+
 def fake_delta_bytes(values: list[float]) -> bytes:
     return state_dict_to_bytes({"w": torch.tensor(values)})
+
+
+def fake_lora_delta_bytes(a_values: list[float], b_values: list[float]) -> bytes:
+    return state_dict_to_bytes({"lora_A.weight": torch.tensor(a_values), "lora_B.weight": torch.tensor(b_values)})
 
 
 def test_fast_close_when_both_online_nodes_submit(db):
@@ -152,6 +176,33 @@ def test_offline_node_drops_out_of_fast_close_wait_set(db, config):
     # fast-close now fires off node_a alone, since node_b no longer counts as online
     closed = close_ready_rounds(db, now=round_row["opened_at"] + 1)
     assert closed == [round_row["id"]]
+
+
+def test_lora_run_fields_round_trip_and_round_completes(db):
+    run_id = make_lora_run(db)
+    run = db.get_training_run(run_id)
+    assert run["model_backend"] == "lora_qwen2.5-1.5b"
+    assert run["base_model_id"] == "Qwen/Qwen2.5-1.5B-Instruct"
+    assert run["lora_r"] == 16
+    assert run["lora_alpha"] == 32
+    assert run["lora_target_modules"] == "q_proj,k_proj,v_proj,o_proj"
+    # scratch_gpt-only architecture fields are unset for a lora run
+    assert run["n_layer"] is None
+    assert run["block_size"] is None
+
+    node_a = make_training_node(db, "gpu-a")
+    start_run(db, run_id)
+    round_row = db.get_current_round(run_id)
+    assert round_row["status"] == "open"
+
+    submit_delta(db, round_row["id"], node_a, fake_lora_delta_bytes([0.05, 0.05], [0.0, 0.0]), 2.0, 3, 1.0)
+    closed = close_ready_rounds(db, now=round_row["opened_at"] + 1)
+    assert closed == [round_row["id"]]
+
+    aggregate_closed_rounds(db)
+    updated_run = db.get_training_run(run_id)
+    assert updated_run["current_round"] == 1
+    assert updated_run["latest_checkpoint_id"] is not None
 
 
 def test_round_closable_after_coordinator_restart(tmp_path):

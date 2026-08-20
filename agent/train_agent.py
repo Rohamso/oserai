@@ -27,9 +27,22 @@ from agent.coordinator_client import CoordinatorClient
 from agent.train_config import TrainAgentConfig
 from common.logging_setup import log_event, setup_logging
 from training.checkpoint_io import bytes_to_state_dict, state_dict_to_bytes
+from training.chat_dataset import get_batch as get_chat_batch
+from training.chat_dataset import load_dolly_chat_tokens
 from training.config import GPTConfig
 from training.dataset import get_batch, load_dataset, shard_for_node
+from training.lora import (
+    LoraRunConfig,
+    build_lora_adapter,
+    get_adapter_state_dict,
+    load_adapter_state_dict,
+    load_frozen_base,
+    load_tokenizer,
+    local_lora_steps,
+)
 from training.model import GPT
+
+LORA_BACKEND_PREFIX = "lora_"
 
 logger = setup_logging("train_agent")
 
@@ -88,10 +101,52 @@ def _heartbeat_loop(client: CoordinatorClient, state: AgentState, interval_s: fl
         state.shutdown_requested.wait(interval_s)
 
 
+def run_round_lora(
+    client: CoordinatorClient, config: TrainAgentConfig,
+    round_info: dict[str, Any], peft_model: Any, shard: torch.Tensor, state: AgentState,
+) -> Optional[float]:
+    """LoRA-backend counterpart to run_round: same round lifecycle (download
+    base checkpoint, H local steps, upload delta) but the actual local-step
+    math lives in training/lora.py's local_lora_steps -- only the adapter's
+    tiny state dict is downloaded/trained/uploaded, the frozen base model
+    never moves over the network."""
+    round_id = round_info["round_id"]
+    log_event(logger, "round_started", round_id=round_id, round_num=round_info["round_num"])
+    state.status = "busy"
+    t0 = time.time()
+    try:
+        weights = client.download_checkpoint(round_info["base_checkpoint_id"])
+        load_adapter_state_dict(peft_model, bytes_to_state_dict(weights))
+
+        def get_batch_fn(block_size: int, batch_size: int, device: str) -> tuple[torch.Tensor, torch.Tensor]:
+            return get_chat_batch(shard, block_size, batch_size, device)
+
+        delta, last_loss = local_lora_steps(
+            peft_model, get_batch_fn, round_info["inner_lr"], round_info["inner_steps_h"],
+            round_info["inner_batch_size"], round_info["block_size"], config.device,
+        )
+        wall_time_s = time.time() - t0
+
+        result = client.upload_delta(
+            round_id, state_dict_to_bytes(delta),
+            local_loss=last_loss, local_steps_completed=round_info["inner_steps_h"], wall_time_s=wall_time_s,
+        )
+        if result is None:
+            log_event(logger, "round_discarded_already_closed", round_id=round_id)
+        else:
+            log_event(
+                logger, "round_completed", round_id=round_id,
+                loss=round(last_loss, 4), wall_time_s=round(wall_time_s, 1),
+            )
+        return last_loss
+    finally:
+        state.status = "idle"
+
+
 def run_round(
     client: CoordinatorClient, config: TrainAgentConfig,
     round_info: dict[str, Any], model: GPT, shard: torch.Tensor, state: AgentState,
-) -> None:
+) -> Optional[float]:
     round_id = round_info["round_id"]
     log_event(logger, "round_started", round_id=round_id, round_num=round_info["round_num"])
     state.status = "busy"
@@ -133,6 +188,7 @@ def run_round(
                 loss=round(last_loss, 4) if last_loss is not None else None,
                 wall_time_s=round(wall_time_s, 1),
             )
+        return last_loss
     finally:
         state.status = "idle"
 
@@ -152,13 +208,28 @@ def run(config_path: str = "train_node_config.yaml") -> None:
     ensure_registered(client, config)
 
     run_info = client.get_run(config.run_id)
-    gpt_config = GPTConfig(
-        vocab_size=run_info["vocab_size"], block_size=run_info["block_size"],
-        n_layer=run_info["n_layer"], n_head=run_info["n_head"], n_embd=run_info["n_embd"],
-    )
-    model = GPT(gpt_config).to(config.device)
+    is_lora = run_info["model_backend"].startswith(LORA_BACKEND_PREFIX)
 
-    data = load_dataset(run_info["dataset_name"])
+    if is_lora:
+        if run_info["dataset_name"] != "dolly_chat":
+            raise ValueError(f"lora backend only supports dataset_name=dolly_chat currently, got {run_info['dataset_name']!r}")
+        lora_config = LoraRunConfig(
+            base_model_id=run_info["base_model_id"], lora_r=run_info["lora_r"], lora_alpha=run_info["lora_alpha"],
+            lora_dropout=run_info["lora_dropout"], lora_target_modules=tuple(run_info["lora_target_modules"].split(",")),
+        )
+        base = load_frozen_base(lora_config.base_model_id, config.device)
+        tokenizer = load_tokenizer(lora_config.base_model_id)
+        model = build_lora_adapter(base, lora_config)
+        model.print_trainable_parameters()
+        data = load_dolly_chat_tokens(tokenizer)
+    else:
+        gpt_config = GPTConfig(
+            vocab_size=run_info["vocab_size"], block_size=run_info["block_size"],
+            n_layer=run_info["n_layer"], n_head=run_info["n_head"], n_embd=run_info["n_embd"],
+        )
+        model = GPT(gpt_config).to(config.device)
+        data = load_dataset(run_info["dataset_name"])
+
     shard = shard_for_node(data, config.shard_index, config.num_shards).to(config.device)
     log_event(
         logger, "shard_loaded", shard_index=config.shard_index,
@@ -185,7 +256,10 @@ def run(config_path: str = "train_node_config.yaml") -> None:
             state.shutdown_requested.wait(config.poll_interval_s)
             continue
 
-        run_round(client, config, round_info, model, shard, state)
+        if is_lora:
+            run_round_lora(client, config, round_info, model, shard, state)
+        else:
+            run_round(client, config, round_info, model, shard, state)
 
     log_event(logger, "shutting_down", node_id=client.node_id)
     client.deregister()

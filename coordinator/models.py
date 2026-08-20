@@ -134,15 +134,37 @@ class TrainingNodeRegisterRequest(BaseModel):
 
 class TrainingRunCreateRequest(BaseModel):
     name: str
-    n_layer: int = 8
-    n_head: int = 8
-    n_embd: int = 512
-    block_size: int = 512
-    dataset_name: str = "tinystories"
+    # "lora_qwen2.5-1.5b" (default): LoRA-fine-tune a real pretrained
+    # instruct model -- see training/lora.py. "scratch_gpt": the original
+    # from-scratch small-GPT path (training/model.py), kept for anyone who
+    # wants to experiment with it, no longer the default now that LoRA
+    # gives real answer quality at far less bandwidth per round.
+    model_backend: str = "lora_qwen2.5-1.5b"
+
+    # n_layer/n_head/n_embd: scratch_gpt only (from-scratch model
+    # architecture). block_size (max local-step sequence length) applies to
+    # both backends. All None pick up the backend-specific defaults applied
+    # in the /training/runs handler.
+    n_layer: Optional[int] = None
+    n_head: Optional[int] = None
+    n_embd: Optional[int] = None
+    block_size: Optional[int] = None
+
+    # lora_* backends only -- which pretrained model to fine-tune and the
+    # adapter's shape. None picks up training/lora.py's defaults.
+    base_model_id: Optional[str] = None
+    lora_r: Optional[int] = None
+    lora_alpha: Optional[int] = None
+    lora_dropout: Optional[float] = None
+    lora_target_modules: Optional[list[str]] = None
+
+    dataset_name: str = "dolly_chat"
     # Set to a completed run's id to seed round 0 from that run's final
-    # checkpoint instead of a fresh random init -- e.g. start an SFT run
-    # (dataset_name="dolly_chat") from a finished pretrain run's weights.
-    # n_layer/n_head/n_embd/block_size must match the source run exactly.
+    # checkpoint instead of a fresh init -- e.g. continue a scratch_gpt SFT
+    # run from a finished pretrain run's weights. scratch_gpt only: an
+    # architecture match is required (n_layer/n_head/n_embd/block_size).
+    # Not used for lora_* backends -- every LoRA run already starts from
+    # the same pretrained base_model_id, there's no separate pretrain stage.
     init_from_run_id: Optional[str] = None
     inner_lr: float = 1e-3
     inner_steps_h: int = 50
@@ -162,11 +184,17 @@ class TrainingRunOut(BaseModel):
     id: str
     name: str
     status: str
-    n_layer: int
-    n_head: int
-    n_embd: int
-    block_size: int
+    model_backend: str
+    n_layer: Optional[int]
+    n_head: Optional[int]
+    n_embd: Optional[int]
+    block_size: Optional[int]
     vocab_size: int
+    base_model_id: Optional[str]
+    lora_r: Optional[int]
+    lora_alpha: Optional[int]
+    lora_dropout: Optional[float]
+    lora_target_modules: Optional[str]
     dataset_name: str
     inner_lr: float
     inner_steps_h: int

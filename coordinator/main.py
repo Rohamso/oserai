@@ -52,7 +52,23 @@ try:
     from training.config import GPTConfig
     from training.dataset import CHAT_DATASETS, CHAT_TEMPLATE, DATASET_NAMES, VOCAB_SIZE, eot_token_id, get_encoder
     from training.model import GPT
+    from training.lora import (
+        DEFAULT_BASE_MODEL_ID,
+        DEFAULT_BLOCK_SIZE as DEFAULT_LORA_BLOCK_SIZE,
+        DEFAULT_LORA_ALPHA,
+        DEFAULT_LORA_DROPOUT,
+        DEFAULT_LORA_R,
+        DEFAULT_LORA_TARGET_MODULES,
+        LoraRunConfig,
+        generate_chat_reply,
+        get_adapter_state_dict,
+        load_adapter_state_dict,
+        load_frozen_base,
+        load_tokenizer,
+        temporary_lora_adapter,
+    )
 
+    LORA_BACKEND_PREFIX = "lora_"
     TRAINING_AVAILABLE = True
 except ImportError:
     TRAINING_AVAILABLE = False
@@ -258,38 +274,70 @@ if TRAINING_AVAILABLE:
         if req.dataset_name not in DATASET_NAMES:
             raise HTTPException(status_code=400, detail=f"unknown dataset_name, expected one of {sorted(DATASET_NAMES)}")
 
-        if req.init_from_run_id:
-            source = db.get_training_run(req.init_from_run_id)
-            if source is None:
-                raise HTTPException(status_code=404, detail="unknown init_from_run_id")
-            if not source["latest_checkpoint_id"]:
-                raise HTTPException(status_code=400, detail="init_from_run_id run has no checkpoint yet")
-            source_shape = (source["n_layer"], source["n_head"], source["n_embd"], source["block_size"])
-            req_shape = (req.n_layer, req.n_head, req.n_embd, req.block_size)
-            if source_shape != req_shape:
+        if req.model_backend.startswith(LORA_BACKEND_PREFIX):
+            if req.init_from_run_id:
                 raise HTTPException(
                     status_code=400,
-                    detail="init_from_run_id model shape does not match this run's n_layer/n_head/n_embd/block_size",
+                    detail="init_from_run_id isn't supported for lora_* backends -- every LoRA run already "
+                           "starts from the same pretrained base_model_id, there's no separate pretrain stage",
                 )
-            initial_state_bytes = db.get_checkpoint_blob(source["latest_checkpoint_id"])
-        else:
-            torch.manual_seed(1337)  # every node must start round 0 from the identical initialization
-            model = GPT(GPTConfig(
-                vocab_size=VOCAB_SIZE, block_size=req.block_size,
-                n_layer=req.n_layer, n_head=req.n_head, n_embd=req.n_embd,
-            ))
-            initial_state_bytes = state_dict_to_bytes(model.state_dict())
 
-        run_id = db.create_training_run(
-            name=req.name, n_layer=req.n_layer, n_head=req.n_head, n_embd=req.n_embd,
-            block_size=req.block_size, vocab_size=VOCAB_SIZE, dataset_name=req.dataset_name,
-            inner_lr=req.inner_lr, inner_steps_h=req.inner_steps_h, inner_batch_size=req.inner_batch_size,
-            outer_lr=req.outer_lr, outer_momentum=req.outer_momentum, max_rounds=req.max_rounds,
-            round_timeout_s=req.round_timeout_s, quorum=req.quorum,
-        )
+            base_model_id = req.base_model_id or DEFAULT_BASE_MODEL_ID
+            block_size = req.block_size or DEFAULT_LORA_BLOCK_SIZE
+            lora_config = LoraRunConfig(
+                base_model_id=base_model_id,
+                lora_r=req.lora_r or DEFAULT_LORA_R,
+                lora_alpha=req.lora_alpha or DEFAULT_LORA_ALPHA,
+                lora_dropout=req.lora_dropout if req.lora_dropout is not None else DEFAULT_LORA_DROPOUT,
+                lora_target_modules=tuple(req.lora_target_modules) if req.lora_target_modules else DEFAULT_LORA_TARGET_MODULES,
+            )
+            torch.manual_seed(1337)  # the coordinator's one canonical round-0 adapter every node downloads
+            base = load_frozen_base(base_model_id, device="cpu", dtype=torch.float16)
+            tokenizer = load_tokenizer(base_model_id)
+            with temporary_lora_adapter(base, lora_config) as peft_model:
+                initial_state_bytes = state_dict_to_bytes(get_adapter_state_dict(peft_model))
+
+            run_id = db.create_training_run(
+                name=req.name, vocab_size=tokenizer.vocab_size, dataset_name=req.dataset_name,
+                inner_lr=req.inner_lr, inner_steps_h=req.inner_steps_h, inner_batch_size=req.inner_batch_size,
+                outer_lr=req.outer_lr, outer_momentum=req.outer_momentum, max_rounds=req.max_rounds,
+                round_timeout_s=req.round_timeout_s, quorum=req.quorum, block_size=block_size,
+                model_backend=req.model_backend, base_model_id=base_model_id,
+                lora_r=lora_config.lora_r, lora_alpha=lora_config.lora_alpha, lora_dropout=lora_config.lora_dropout,
+                lora_target_modules=",".join(lora_config.lora_target_modules),
+            )
+        else:
+            n_layer, n_head, n_embd, block_size = req.n_layer or 8, req.n_head or 8, req.n_embd or 512, req.block_size or 512
+
+            if req.init_from_run_id:
+                source = db.get_training_run(req.init_from_run_id)
+                if source is None:
+                    raise HTTPException(status_code=404, detail="unknown init_from_run_id")
+                if not source["latest_checkpoint_id"]:
+                    raise HTTPException(status_code=400, detail="init_from_run_id run has no checkpoint yet")
+                source_shape = (source["n_layer"], source["n_head"], source["n_embd"], source["block_size"])
+                if source_shape != (n_layer, n_head, n_embd, block_size):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="init_from_run_id model shape does not match this run's n_layer/n_head/n_embd/block_size",
+                    )
+                initial_state_bytes = db.get_checkpoint_blob(source["latest_checkpoint_id"])
+            else:
+                torch.manual_seed(1337)  # every node must start round 0 from the identical initialization
+                model = GPT(GPTConfig(vocab_size=VOCAB_SIZE, block_size=block_size, n_layer=n_layer, n_head=n_head, n_embd=n_embd))
+                initial_state_bytes = state_dict_to_bytes(model.state_dict())
+
+            run_id = db.create_training_run(
+                name=req.name, n_layer=n_layer, n_head=n_head, n_embd=n_embd,
+                block_size=block_size, vocab_size=VOCAB_SIZE, dataset_name=req.dataset_name,
+                inner_lr=req.inner_lr, inner_steps_h=req.inner_steps_h, inner_batch_size=req.inner_batch_size,
+                outer_lr=req.outer_lr, outer_momentum=req.outer_momentum, max_rounds=req.max_rounds,
+                round_timeout_s=req.round_timeout_s, quorum=req.quorum, model_backend=req.model_backend,
+            )
+
         checkpoint_id = db.save_checkpoint(run_id, "global_weights", initial_state_bytes, round_num=0)
         db.advance_run_round(run_id, 0, checkpoint_id, None)
-        log_event(logger, "training_run_created", run_id=run_id, name=req.name)
+        log_event(logger, "training_run_created", run_id=run_id, name=req.name, model_backend=req.model_backend)
         return TrainingRunCreateResponse(run_id=run_id)
 
     @app.post("/training/runs/{run_id}/start")
@@ -367,6 +415,21 @@ if TRAINING_AVAILABLE:
             raise HTTPException(status_code=404, detail="unknown run")
         if not run["latest_checkpoint_id"]:
             raise HTTPException(status_code=400, detail="run has no checkpoint yet")
+
+        if run["model_backend"].startswith(LORA_BACKEND_PREFIX):
+            base = load_frozen_base(run["base_model_id"], device="cpu", dtype=torch.float16)
+            tokenizer = load_tokenizer(run["base_model_id"])
+            lora_config = LoraRunConfig(
+                base_model_id=run["base_model_id"], lora_r=run["lora_r"], lora_alpha=run["lora_alpha"],
+                lora_dropout=run["lora_dropout"], lora_target_modules=tuple(run["lora_target_modules"].split(",")),
+            )
+            with temporary_lora_adapter(base, lora_config) as peft_model:
+                load_adapter_state_dict(peft_model, bytes_to_state_dict(db.get_checkpoint_blob(run["latest_checkpoint_id"])))
+                text = generate_chat_reply(
+                    peft_model, tokenizer, req.prompt, "cpu",
+                    max_new_tokens=req.max_new_tokens, temperature=req.temperature,
+                )
+            return GenerateResponse(text=text)
 
         gpt_config = GPTConfig(
             vocab_size=run["vocab_size"], block_size=run["block_size"],

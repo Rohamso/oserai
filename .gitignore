@@ -14,3 +14,5 @@ train_node_config.yaml
 *.pt
 training/data/tinystories.txt
 training/data/dolly15k_chat.txt
+desktop_app/build/
+desktop_app/dist/

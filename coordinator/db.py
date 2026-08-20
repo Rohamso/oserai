@@ -109,11 +109,21 @@ CREATE TABLE IF NOT EXISTS training_runs (
     id                        TEXT PRIMARY KEY,
     name                      TEXT NOT NULL,
     status                    TEXT NOT NULL DEFAULT 'pending',
-    n_layer                   INTEGER NOT NULL,
-    n_head                    INTEGER NOT NULL,
-    n_embd                    INTEGER NOT NULL,
-    block_size                INTEGER NOT NULL,
+    model_backend             TEXT NOT NULL DEFAULT 'scratch_gpt',
+    -- n_layer/n_head/n_embd/block_size: scratch_gpt only (architecture of
+    -- the from-scratch model). base_model_id/lora_*: lora backends only
+    -- (which pretrained model + adapter shape). Nullable because a run
+    -- only ever populates one set, depending on model_backend.
+    n_layer                   INTEGER,
+    n_head                    INTEGER,
+    n_embd                    INTEGER,
+    block_size                INTEGER,
     vocab_size                INTEGER NOT NULL,
+    base_model_id             TEXT,
+    lora_r                    INTEGER,
+    lora_alpha                INTEGER,
+    lora_dropout              REAL,
+    lora_target_modules       TEXT,
     dataset_name              TEXT NOT NULL,
     inner_lr                  REAL NOT NULL,
     inner_steps_h             INTEGER NOT NULL,
@@ -559,21 +569,28 @@ class Database:
     # ------------------------------------------------------------------ #
 
     def create_training_run(
-        self, name: str, n_layer: int, n_head: int, n_embd: int, block_size: int,
-        vocab_size: int, dataset_name: str, inner_lr: float, inner_steps_h: int,
+        self, name: str, vocab_size: int, dataset_name: str, inner_lr: float, inner_steps_h: int,
         inner_batch_size: int, outer_lr: float, outer_momentum: float,
         max_rounds: int, round_timeout_s: int, quorum: int,
+        model_backend: str = "scratch_gpt",
+        n_layer: Optional[int] = None, n_head: Optional[int] = None,
+        n_embd: Optional[int] = None, block_size: Optional[int] = None,
+        base_model_id: Optional[str] = None, lora_r: Optional[int] = None,
+        lora_alpha: Optional[int] = None, lora_dropout: Optional[float] = None,
+        lora_target_modules: Optional[str] = None,
     ) -> str:
         run_id = str(uuid.uuid4())
         with self._lock:
             self._conn.execute(
                 """INSERT INTO training_runs
-                   (id, name, status, n_layer, n_head, n_embd, block_size, vocab_size,
+                   (id, name, status, model_backend, n_layer, n_head, n_embd, block_size, vocab_size,
+                    base_model_id, lora_r, lora_alpha, lora_dropout, lora_target_modules,
                     dataset_name, inner_lr, inner_steps_h, inner_batch_size, outer_lr,
                     outer_momentum, max_rounds, round_timeout_s, quorum, created_at)
-                   VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    run_id, name, n_layer, n_head, n_embd, block_size, vocab_size,
+                    run_id, name, model_backend, n_layer, n_head, n_embd, block_size, vocab_size,
+                    base_model_id, lora_r, lora_alpha, lora_dropout, lora_target_modules,
                     dataset_name, inner_lr, inner_steps_h, inner_batch_size, outer_lr,
                     outer_momentum, max_rounds, round_timeout_s, quorum, time.time(),
                 ),

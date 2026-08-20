@@ -49,10 +49,14 @@ coordinator/   FastAPI app, SQLite data layer, dispatch/scoring/verification,
                training round dispatch (training_dispatch.py), dashboard
 agent/         node agent: config, Ollama client, coordinator client, main
                loop; train_agent.py is the separate DiLoCo training node loop
+desktop_app/   PySide6 GUI wrapping train_agent.py -- see "Desktop app" below
 scripts/       generate_test_batch.py, submit_batch.py, chaos.py,
-               prepare_training_data.py, train_local.py
+               prepare_training_data.py, train_local.py, train_local_lora.py,
+               import_local_checkpoint.py
 training/      model/dataset/tokenizer/outer-optimizer code shared by the
-               coordinator and every training agent
+               coordinator and every training agent -- lora.py and
+               chat_dataset.py are the LoRA-on-a-real-model path, model.py
+               and dataset.py are the from-scratch path
 tests/         pytest suite (dispatch scoring, verification, requeue,
                heartbeat expiry, DiLoCo round lifecycle)
 ```
@@ -189,22 +193,137 @@ Covers dispatch scoring (`score_node`, `pick_best_node`, verification-aware
 node exclusion), verification-pair comparison, requeue-on-timeout and
 terminal failure after `max_job_attempts`, heartbeat expiry, and the DiLoCo
 training-round lifecycle (fast/slow close, skipped rounds, duplicate-delta
-rejection, offline-node handling, crash recovery). Ollama is mocked in
+rejection, offline-node handling, crash recovery) for both the `scratch_gpt`
+and `lora_*` backends — dispatch/aggregation is backend-agnostic (just moves
+and averages `dict[str, Tensor]`s), so these tests use small hand-built
+tensors rather than a real base model. Ollama is mocked in
 `tests/test_agent_ollama.py`; torch-dependent tests are skipped automatically
-if torch isn't installed — no local Ollama server or GPU needed to run the
-suite.
+if torch isn't installed — no local Ollama server, GPU, or ~3GB model
+download needed to run the suite.
 
 ## Training (DiLoCo) — distributed training, not just inference
 
-A second, independent capability: train a small GPT-style model (nanoGPT-shaped
+A second, independent capability: train a model across your own
+training-role nodes using [DiLoCo](https://arxiv.org/abs/2311.08105) — each
+worker runs H local steps on its own shard of the run's dataset, uploads a
+pseudo-gradient (weight delta) instead of raw gradients, and the coordinator
+averages deltas across whoever reported and applies them via an outer
+SGD+Nesterov-momentum optimizer. Same "agents always poll, coordinator never
+reaches in" invariant as Phase 1 — round lifecycle is pull-based, and
+`training/checkpoint_io.py`/`training/outer_optim.py` don't care what's
+inside a delta — they just move and average `dict[str, Tensor]`s.
+
+Two backends implement this, selected per-run via `model_backend`:
+
+- **`lora_qwen2.5-1.5b`** (default) — LoRA-fine-tune a real pretrained
+  instruct model. Adapts knowledge the base model already has instead of
+  building it from zero, and the delta exchanged every round is the LoRA
+  adapter only (~17MB) rather than the full model — both much better
+  answer quality and far less bandwidth per round than training from
+  scratch. **This is the path to use if you want an actually-usable chat
+  model.** See "LoRA fine-tuning" below.
+- **`scratch_gpt`** — the original from-scratch small-GPT path (custom
+  nanoGPT-shaped architecture, GPT-2 BPE via `tiktoken`, trained from random
+  init). Kept for anyone who wants to experiment with training a model's
+  knowledge entirely from your own network's compute, with the ceiling that
+  implies — see its own "Honest expectation" note further down.
+
+### LoRA fine-tuning on a real model (`lora_qwen2.5-1.5b`)
+
+Base model: [Qwen2.5-1.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct)
+(Apache 2.0, ungated on Hugging Face — no account/token/license click-through
+needed). The base model is always frozen; only LoRA adapter matrices (rank
+16 / alpha 32 on the attention projections by default, ~4.4M params, 0.28%
+of the model) ever get gradients or move over the network. The coordinator
+never needs to train — it only averages adapter deltas and, for `/generate`,
+runs the frozen base + adapter forward for inference.
+
+Training data: `dolly_chat` — [databricks-dolly-15k](https://huggingface.co/datasets/databricks/databricks-dolly-15k)
+reformatted into instruction/response pairs, tokenized through the base
+model's own chat template (`tokenizer.apply_chat_template`) rather than a
+hand-rolled one, since that's the format the base model was already
+instruct-tuned on.
+
+**Honest expectation**: still a small model (1.5B params) fine-tuned with
+modest compute — a genuinely competent, fast, coherent chat model for
+everyday questions, clearly a tier above the from-scratch path, but not
+GPT-3.5-or-better. If you want frontier-model quality today, the Phase 1
+inference side already runs real large pretrained chat models via Ollama;
+this pipeline exists to prove out *your own* distributed fine-tuning
+infrastructure on a real base model, not to out-train a frontier lab.
+
+#### Setup
+
+```bash
+pip install -r requirements-training.txt   # torch, tiktoken, transformers, peft, accelerate, safetensors
+python scripts/prepare_training_data.py    # writes training/data/dolly15k_chat.txt (also fetches tinystories.txt, used by the scratch_gpt path)
+```
+
+The base model downloads automatically the first time it's loaded (~3GB,
+cached under `~/.cache/huggingface`) — same one-time-fetch idea as the
+existing `ollama pull` / tiktoken steps.
+
+Each GPU training machine needs a CUDA-matched torch wheel instead of the
+default PyPI one — follow the selector at
+https://pytorch.org/get-started/locally/ **before** running
+`pip install -r requirements-training.txt`. Apple Silicon (`mps`) and
+CPU-only both work out of the box, just slower.
+
+#### De-risk locally before going distributed
+
+```bash
+python scripts/train_local_lora.py --steps 2000 --out out/lora_adapter.pt
+python scripts/train_local_lora.py --sample-only --checkpoint out/lora_adapter.pt --prompt "What is the capital of France?"
+```
+
+#### Running a training run
+
+```bash
+curl -X POST http://localhost:8000/training/runs \
+    -d '{"name": "lora-demo"}' -H 'Content-Type: application/json'
+curl -X POST http://localhost:8000/training/runs/<run_id>/start
+
+# on each contributor machine (see "Desktop app" below for a GUI alternative)
+cp agent/train_node_config.example.yaml train_node_config.yaml
+# edit: node_name, run_id, shard_index (0, 1, ... one per known machine), device
+python -m agent.train_agent --config train_node_config.yaml
+```
+
+Chat with it the same way as any run — dashboard `Talk to a trained run` box,
+or `POST /training/runs/{id}/generate` — prompts get wrapped in the chat
+template and generation stops at the model's own end-of-turn token.
+
+### Desktop app — let others train from their own PCs
+
+`desktop_app/` is a PySide6 GUI wrapper around `agent/train_agent.py`: fill
+in a coordinator URL and a run ID, hit **Start contributing**, and that
+machine registers and starts pulling DiLoCo rounds in the background —
+closing the window minimizes to the system tray rather than quitting, same
+"install once, keep contributing" shape as BOINC/Folding@home. It drives the
+exact same tested agent code as the CLI, not a separate implementation.
+
+```bash
+pip install -r requirements-desktop.txt
+python -m desktop_app.main
+```
+
+To package a standalone app contributors can just double-click (no Python
+install needed on their end):
+
+```bash
+cd desktop_app && pyinstaller build.spec
+```
+
+Full details, including packaging notes, in `desktop_app/README.md`. Only
+verified/built on macOS so far — Windows/Linux use the same command but
+need to be built on those platforms.
+
+### From-scratch training (`scratch_gpt`)
+
+The original path: train a small GPT-style model (nanoGPT-shaped
 decoder-only transformer, GPT-2 BPE tokenizer via `tiktoken`, ~51M params at
-the defaults) across your own training-role nodes using
-[DiLoCo](https://arxiv.org/abs/2311.08105) — each worker runs H local AdamW
-steps on its own shard of the run's dataset, uploads a pseudo-gradient
-(weight delta) instead of raw gradients, and the coordinator averages deltas
-across whoever reported and applies them via an outer SGD+Nesterov-momentum
-optimizer. Same "agents always poll, coordinator never reaches in" invariant
-as Phase 1 — round lifecycle is pull-based.
+the defaults) entirely from random init using your network's own compute —
+no pretrained base model involved at all.
 
 Two bundled datasets support a **pretrain → instruction-tune** pipeline, the
 same shape real small chat models are built with:
@@ -213,22 +332,23 @@ same shape real small chat models are built with:
   [TinyStories](https://arxiv.org/abs/2305.07759) corpus, purpose-built so
   tiny from-scratch models learn fluent, coherent English. Use this for the
   base pretrain run.
-- `dolly_chat` — [databricks-dolly-15k](https://huggingface.co/datasets/databricks/databricks-dolly-15k)
-  reformatted into an Alpaca-style `### Instruction:\n...\n\n### Response:\n...`
-  template. Use this for a second, SFT run started from the pretrain run's
-  checkpoint (`init_from_run_id`, see below).
+- `dolly_chat` — reformatted into an Alpaca-style
+  `### Instruction:\n...\n\n### Response:\n...` template (a different,
+  simpler tokenization of the same source file the LoRA path uses). Use
+  this for a second, SFT run started from the pretrain run's checkpoint
+  (`init_from_run_id`, see below).
 - `tiny_shakespeare` still ships bundled (no fetch needed) as a fast raw-text
   smoke test — it isn't chat-formatted.
 
-**Honest expectation**: this is still a from-scratch model trained on a
-demo-sized corpus with limited compute. A fully trained pretrain+SFT run
-produces short, mostly-on-topic, occasionally-broken answers in a chat
-*format* — not GPT-3.5-or-better quality. If you want an actually
-GPT-quality chat experience today, the Phase 1 inference side already runs
-real pretrained chat models via Ollama; this pipeline exists to prove out
-*your own* distributed training infrastructure, not to compete with them.
+**Honest expectation**: a from-scratch model on a demo-sized corpus with
+limited compute produces short, mostly-on-topic, occasionally-broken answers
+in a chat *format* — clearly below the LoRA path's quality, since it's
+building knowledge from zero rather than adapting a model that already has
+it. Kept as an option for experimenting with pure from-scratch distributed
+training; the LoRA path above is the one to use for an actually-usable
+result.
 
-### Setup
+#### Setup
 
 The coordinator only ever does CPU-side aggregation and CPU-side text
 generation — it never trains — so a plain CPU `pip install torch` is enough
@@ -258,7 +378,7 @@ not the same machine that ran the script):
 python scripts/prepare_training_data.py   # writes training/data/{tinystories,dolly15k_chat}.txt
 ```
 
-### De-risk locally before going distributed
+#### De-risk locally before going distributed
 
 `scripts/train_local.py` runs the same model/dataset/training loop
 single-machine, no coordinator or network involved — the fast way to check
@@ -271,12 +391,13 @@ python scripts/train_local.py --dataset dolly_chat --init-checkpoint out/pretrai
 python scripts/train_local.py --sample-only --checkpoint out/sft.pt --prompt "What is the capital of France?"
 ```
 
-### Running a training run
+#### Running a training run
 
 ```bash
 # 1. pretrain run on TinyStories
 curl -X POST http://localhost:8000/training/runs \
-    -d '{"name": "pretrain", "dataset_name": "tinystories"}' -H 'Content-Type: application/json'
+    -d '{"name": "pretrain", "model_backend": "scratch_gpt", "dataset_name": "tinystories"}' \
+    -H 'Content-Type: application/json'
 curl -X POST http://localhost:8000/training/runs/<pretrain_run_id>/start
 
 # 2. on each GPU machine, once the pretrain run has completed (or you're
@@ -288,7 +409,7 @@ python -m agent.train_agent --config train_node_config.yaml
 # 3. SFT run, seeded from the pretrain run's weights via init_from_run_id --
 #    n_layer/n_head/n_embd/block_size must match the pretrain run exactly
 curl -X POST http://localhost:8000/training/runs \
-    -d '{"name": "sft", "dataset_name": "dolly_chat", "init_from_run_id": "<pretrain_run_id>"}' \
+    -d '{"name": "sft", "model_backend": "scratch_gpt", "dataset_name": "dolly_chat", "init_from_run_id": "<pretrain_run_id>"}' \
     -H 'Content-Type: application/json'
 curl -X POST http://localhost:8000/training/runs/<sft_run_id>/start
 # point agent/train_agent.py's train_node_config.yaml run_id at the SFT run and run it again
@@ -302,20 +423,7 @@ dashboard, or `POST /training/runs/{id}/generate` directly, to chat with it
 generation stops at `<|endoftext|>` instead of rambling to
 `max_new_tokens`; other runs return a raw text completion as before.
 
-### Fault tolerance
-
-Quorum defaults to 1: a round closes and applies as soon as either every
-currently-online training node has submitted (fast path) or
-`round_timeout_s` elapses (slow path) — one dead/slow GPU never blocks a
-round, and killing both workers mid-round just carries the weights forward
-unchanged (`skipped`) rather than erroring, exactly like Phase 1's "record,
-don't punish" verification story. `scripts/chaos.py --list --role training`
-shows training-node status; since training nodes run on real hardware (not
-the docker-compose demo), simulate churn by killing `agent/train_agent.py`
-yourself and watching the dashboard, the same way Phase 1 says to for a real
-inference contributor.
-
-### Going bigger
+#### Going bigger
 
 Model size is a `POST /training/runs` body param (`n_layer`/`n_head`/`n_embd`/
 `block_size`), not a code change. The ~51M-param default trains fine on one
@@ -325,19 +433,42 @@ real GPU(s) and a lot more wall-clock/DiLoCo rounds for a noticeably better
 chat experience, but needs no code changes to try. Same for swapping in a
 larger slice of TinyStories (`--tinystories-mb` on the prep script).
 
-### Explicitly out of scope
+#### Explicitly out of scope (scratch_gpt specifically)
 
 GGUF conversion / serving the trained checkpoint through Ollama — a
 from-scratch nanoGPT checkpoint isn't Ollama-loadable without real
 architecture-translation and quantization work, so generation runs
 server-side on the coordinator instead, and phones stay Phase 1
-inference-only, untouched by this feature. Also out of scope: multi-turn
-chat history (every `/generate` call is one independent instruction/response
-turn, no conversation memory), on-device mobile training,
-multi-concurrent-run node membership tracking (all online training-role
-nodes are treated as one shared pool), and any Byzantine/anti-cheat check on
-submitted deltas (two workers on different data shards are *expected* to
-diverge, unlike inference's exact-match verification).
+inference-only, untouched by this feature. (The LoRA path's base model
+*is* a standard HF checkpoint, so GGUF conversion is more plausible there,
+but still isn't implemented here.)
+
+### Fault tolerance (both backends)
+
+Quorum defaults to 1: a round closes and applies as soon as either every
+currently-online training node has submitted (fast path) or
+`round_timeout_s` elapses (slow path) — one dead/slow contributor never
+blocks a round, and killing both workers mid-round just carries the weights
+forward unchanged (`skipped`) rather than erroring, exactly like Phase 1's
+"record, don't punish" verification story. `scripts/chaos.py --list --role
+training` shows training-node status; since training nodes run on real
+hardware (not the docker-compose demo), simulate churn by killing
+`agent/train_agent.py` (or quitting the desktop app) yourself and watching
+the dashboard, the same way Phase 1 says to for a real inference
+contributor.
+
+### Explicitly out of scope (training, both backends)
+
+Multi-turn chat history (every `/generate` call is one independent
+instruction/response turn, no conversation memory), on-device mobile
+training, multi-concurrent-run node membership tracking (all online
+training-role nodes are treated as one shared pool), and any
+Byzantine/anti-cheat check on submitted deltas (two workers on different
+data shards are *expected* to diverge, unlike inference's exact-match
+verification) — the last point matters more once training moves from a
+small set of known/trusted machines to a public downloadable app: a
+malicious contributor can currently upload a garbage delta and it'll be
+averaged in along with everyone else's, unnoticed.
 
 ## Explicitly out of scope (Phase 1)
 
