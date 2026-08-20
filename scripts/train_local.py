@@ -21,6 +21,7 @@ tinystories/dolly_chat corpora -- tiny_shakespeare ships bundled already.
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
 from pathlib import Path
@@ -80,6 +81,18 @@ def sample(model: GPT, prompt: str, device: str, dataset_name: str, max_new_toke
     return encoder.decode(out[0].tolist())
 
 
+def get_lr(step: int, warmup_steps: int, max_steps: int, lr: float, min_lr: float) -> float:
+    """Linear warmup then cosine decay to min_lr -- the flat LR previously
+    used here let loss destabilize/climb in the back half of long runs."""
+    if step < warmup_steps:
+        return lr * step / max(1, warmup_steps)
+    if step > max_steps:
+        return min_lr
+    decay_ratio = (step - warmup_steps) / max(1, max_steps - warmup_steps)
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
+    return min_lr + coeff * (lr - min_lr)
+
+
 def train(args: argparse.Namespace) -> None:
     device = args.device
     data = load_dataset(args.dataset)
@@ -98,19 +111,27 @@ def train(args: argparse.Namespace) -> None:
         model.load_state_dict(init_model.state_dict())
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
+    min_lr = args.min_lr if args.min_lr is not None else args.lr / 10
+    warmup_steps = args.warmup_steps if args.warmup_steps is not None else max(1, args.steps // 20)
+
     print(f"dataset: {args.dataset}  params: {sum(p.numel() for p in model.parameters()):,}  device: {device}")
     t0 = time.time()
     for step in range(1, args.steps + 1):
+        lr = get_lr(step, warmup_steps, args.steps, args.lr, min_lr)
+        for group in optimizer.param_groups:
+            group["lr"] = lr
+
         x, y = get_batch(train_data, config.block_size, args.batch_size, device)
         _, loss = model(x, y)
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
         optimizer.step()
 
         if step % args.eval_interval == 0 or step == args.steps:
             val_loss = estimate_loss(model, val_data, config.block_size, args.batch_size, device)
             elapsed = time.time() - t0
-            print(f"step {step:5d}/{args.steps}  train_loss {loss.item():.4f}  val_loss {val_loss:.4f}  ({elapsed:.0f}s)")
+            print(f"step {step:5d}/{args.steps}  train_loss {loss.item():.4f}  val_loss {val_loss:.4f}  lr {lr:.2e}  ({elapsed:.0f}s)")
 
     out_path = Path(args.out)
     save_checkpoint(out_path, model, config, args.dataset)
@@ -125,6 +146,9 @@ def main() -> None:
     parser.add_argument("--dataset", choices=sorted(DATASET_NAMES), default="tinystories")
     parser.add_argument("--steps", type=int, default=3000)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--min-lr", type=float, default=None, help="cosine decay floor (default: lr/10)")
+    parser.add_argument("--warmup-steps", type=int, default=None, help="linear warmup steps (default: steps//20)")
+    parser.add_argument("--grad-clip", type=float, default=1.0)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--block-size", type=int, default=512)
     parser.add_argument("--n-layer", type=int, default=8)
