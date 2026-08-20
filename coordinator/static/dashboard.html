@@ -19,6 +19,23 @@
   .progress-fill { background: #2a7; height: 100%; text-align: center; font-size: 0.7rem; color: white; line-height: 18px; white-space: nowrap; }
   .batch-block { margin-bottom: 1.25rem; }
   .muted { opacity: 0.6; font-size: 0.8rem; }
+
+  .chat-shell { border: 1px solid #8884; border-radius: 10px; overflow: hidden; max-width: 700px; }
+  .chat-header { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0.8rem; background: #8881; border-bottom: 1px solid #8884; }
+  .chat-header select { flex: 1; font: inherit; padding: 0.3rem; }
+  .chat-header button { font: inherit; padding: 0.3rem 0.6rem; border-radius: 6px; border: 1px solid #8886; background: transparent; color: inherit; cursor: pointer; }
+  .chat-hint { padding: 0.5rem 0.8rem 0; margin: 0; }
+  .chat-history { height: 360px; overflow-y: auto; padding: 0.8rem; display: flex; flex-direction: column; gap: 0.6rem; }
+  .chat-empty { opacity: 0.5; font-size: 0.85rem; text-align: center; margin-top: 2.5rem; }
+  .msg { max-width: 80%; padding: 0.5rem 0.75rem; border-radius: 12px; font-size: 0.9rem; line-height: 1.4; white-space: pre-wrap; overflow-wrap: break-word; }
+  .msg-user { align-self: flex-end; background: #2a6df4; color: white; border-bottom-right-radius: 3px; }
+  .msg-assistant { align-self: flex-start; background: #8882; border-bottom-left-radius: 3px; }
+  .msg-error { align-self: flex-start; background: #c334; border: 1px solid #c336; border-bottom-left-radius: 3px; }
+  .msg-typing { align-self: flex-start; background: #8882; opacity: 0.6; font-style: italic; border-bottom-left-radius: 3px; }
+  .chat-input-row { display: flex; gap: 0.5rem; padding: 0.6rem; border-top: 1px solid #8884; }
+  .chat-input-row textarea { flex: 1; resize: none; font: inherit; padding: 0.5rem 0.6rem; border-radius: 8px; border: 1px solid #8886; background: transparent; color: inherit; }
+  .chat-input-row button { border-radius: 8px; border: none; background: #2a6df4; color: white; padding: 0 1.1rem; cursor: pointer; font: inherit; font-weight: 600; }
+  .chat-input-row button:disabled { opacity: 0.5; cursor: default; }
 </style>
 
 <h1>Distributed Inference Network</h1>
@@ -41,7 +58,7 @@
 <h2>Training Runs</h2>
 <div id="training-runs"></div>
 
-<h2>Talk to a trained run</h2>
+<h2>Chat</h2>
 <div id="generate-panel" class="muted">No completed-or-in-progress run yet.</div>
 
 <p class="muted">Polling /stats every 5s, /training/runs every 5s.</p>
@@ -95,6 +112,8 @@ async function refresh() {
     </tr>`).join("");
 }
 
+let latestRunsById = {}; // refreshed every poll; read by the chat panel's renderChat closure
+
 async function refreshTraining() {
   let res;
   try {
@@ -126,35 +145,119 @@ async function refreshTraining() {
     genPanel.innerHTML = '<p class="muted">No completed-or-in-progress run yet.</p>';
     return;
   }
+
+  latestRunsById = Object.fromEntries(usableRuns.map(r => [r.id, r]));
+
   if (!genPanel.dataset.built) {
     genPanel.innerHTML = `
-      <select id="gen-run"></select>
-      <p class="muted" style="margin:0.25rem 0;">dolly_chat runs: type a question/instruction, answered chat-style.
-        Other runs: raw text completion.</p>
-      <textarea id="gen-prompt" rows="2" style="width:100%;" placeholder="Prompt or question"></textarea>
-      <button id="gen-button" style="margin-top:0.5rem;">Generate</button>
-      <pre id="gen-output" class="muted" style="white-space:pre-wrap;margin-top:0.5rem;"></pre>
+      <div class="chat-shell">
+        <div class="chat-header">
+          <select id="gen-run"></select>
+          <button id="chat-clear" type="button" title="Clear this run's chat history">Clear</button>
+        </div>
+        <p id="chat-hint" class="muted chat-hint"></p>
+        <div id="chat-history" class="chat-history"><div class="chat-empty">Ask it something.</div></div>
+        <div class="chat-input-row">
+          <textarea id="gen-prompt" rows="1" placeholder="Message&hellip; (Enter to send, Shift+Enter for a new line)"></textarea>
+          <button id="gen-button" type="button">Send</button>
+        </div>
+      </div>
     `;
-    document.getElementById("gen-button").addEventListener("click", async () => {
-      const runId = document.getElementById("gen-run").value;
-      const prompt = document.getElementById("gen-prompt").value;
-      const out = document.getElementById("gen-output");
-      out.textContent = "generating...";
+
+    // Per-run message lists so switching runs doesn't mix conversations --
+    // purely a client-side display convenience: every /generate call is
+    // still one independent request, the backend has no turn memory.
+    const chatsByRun = {};
+    const getChat = (runId) => (chatsByRun[runId] ??= []);
+
+    const historyEl = document.getElementById("chat-history");
+    const hintEl = document.getElementById("chat-hint");
+    const selectEl = document.getElementById("gen-run");
+    const promptEl = document.getElementById("gen-prompt");
+    const buttonEl = document.getElementById("gen-button");
+
+    const escapeHtml = (s) => s.replace(/[&<>]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;"}[c]));
+
+    function renderChat() {
+      const run = latestRunsById[selectEl.value];
+      hintEl.textContent = run && run.dataset_name === "dolly_chat"
+        ? "Answered chat-style by this run's model."
+        : "This run isn't chat-formatted -- expect a raw text completion, not an answer.";
+
+      const messages = getChat(selectEl.value);
+      if (messages.length === 0) {
+        historyEl.innerHTML = '<div class="chat-empty">Ask it something.</div>';
+        return;
+      }
+      historyEl.innerHTML = messages.map(m =>
+        `<div class="msg msg-${m.role}">${escapeHtml(m.text)}</div>`
+      ).join("");
+      historyEl.scrollTop = historyEl.scrollHeight;
+    }
+
+    async function send() {
+      const runId = selectEl.value;
+      const text = promptEl.value.trim();
+      if (!text || !runId) return;
+
+      const messages = getChat(runId);
+      messages.push({role: "user", text});
+      promptEl.value = "";
+      promptEl.style.height = "auto";
+      renderChat();
+
+      buttonEl.disabled = true;
+      promptEl.disabled = true;
+      historyEl.insertAdjacentHTML("beforeend", '<div class="msg msg-typing" id="chat-typing">thinking&hellip;</div>');
+      historyEl.scrollTop = historyEl.scrollHeight;
+
       try {
         const r = await fetch(`/training/runs/${runId}/generate`, {
           method: "POST", headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({prompt, max_new_tokens: 300, temperature: 0.8}),
+          body: JSON.stringify({prompt: text, max_new_tokens: 300, temperature: 0.8}),
         });
         const body = await r.json();
-        out.textContent = r.ok ? body.text : `error: ${body.detail}`;
+        messages.push(r.ok
+          ? {role: "assistant", text: body.text || "(empty response)"}
+          : {role: "error", text: `error: ${body.detail}`});
       } catch (e) {
-        out.textContent = `error: ${e}`;
+        messages.push({role: "error", text: `error: ${e}`});
+      }
+
+      buttonEl.disabled = false;
+      promptEl.disabled = false;
+      renderChat();
+      promptEl.focus();
+    }
+
+    buttonEl.addEventListener("click", send);
+    promptEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        send();
       }
     });
+    promptEl.addEventListener("input", () => {
+      promptEl.style.height = "auto";
+      promptEl.style.height = `${Math.min(promptEl.scrollHeight, 160)}px`;
+    });
+    document.getElementById("chat-clear").addEventListener("click", () => {
+      chatsByRun[selectEl.value] = [];
+      renderChat();
+    });
+    selectEl.addEventListener("change", renderChat);
+
     genPanel.dataset.built = "1";
   }
+
   const select = document.getElementById("gen-run");
+  const previousValue = select.value;
   select.innerHTML = usableRuns.map(r => `<option value="${r.id}">${r.name} [${r.dataset_name}] (${r.status}, round ${r.current_round})</option>`).join("");
+  if (usableRuns.some(r => r.id === previousValue)) {
+    select.value = previousValue;
+  } else {
+    select.dispatchEvent(new Event("change"));
+  }
 }
 
 refresh();
