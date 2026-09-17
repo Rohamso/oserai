@@ -1,0 +1,31 @@
+# Production coordinator only -- no fake agents (those are the local demo's
+# job, see ../docker-compose.yaml). Run from /opt/oserai on the server via
+# deploy.sh, which rsyncs the repo here first.
+#
+# Port 8000 is bound to 127.0.0.1 only: nothing public-facing should reach
+# it directly until TLS + rate limiting are in front of it (Cloudflare or
+# Caddy, added in a later step). Until then this is reachable only via an
+# SSH tunnel for testing.
+
+services:
+  coordinator:
+    build:
+      context: ..
+      dockerfile: Dockerfile.coordinator
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      COORDINATOR_DB_PATH: /data/coordinator.db
+      COORDINATOR_HEARTBEAT_TIMEOUT_S: "90"
+      COORDINATOR_DEFAULT_VERIFICATION_PCT: "0.05"
+    volumes:
+      - coordinator_data:/data
+      # Persists the ~3GB Qwen2.5-1.5B download (and any other HF model
+      # cache) across container restarts/redeploys -- without this it
+      # re-downloads from Hugging Face every time the container is recreated.
+      - hf_cache:/root/.cache/huggingface
+
+volumes:
+  coordinator_data:
+  hf_cache:

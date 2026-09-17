@@ -1,11 +1,18 @@
 FROM python:3.11-slim
 WORKDIR /app
 
-COPY requirements.txt .
+COPY requirements.txt requirements-training.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+
+# --extra-index-url pulls the CPU-only torch build instead of PyPI's default
+# (which bundles CUDA runtime libs the coordinator never uses -- it only
+# aggregates deltas and runs CPU-side /generate, per the README).
+RUN pip install --no-cache-dir -r requirements-training.txt \
+    --extra-index-url https://download.pytorch.org/whl/cpu
 
 COPY common ./common
 COPY coordinator ./coordinator
+COPY training ./training
 
 EXPOSE 8000
 CMD ["uvicorn", "coordinator.main:app", "--host", "0.0.0.0", "--port", "8000"]

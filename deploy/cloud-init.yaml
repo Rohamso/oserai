@@ -1,0 +1,35 @@
+#cloud-config
+# Paste this into Hetzner Cloud's "Cloud config" / user data field when
+# creating the server (Ubuntu 24.04 image). Handles first-boot setup only --
+# getting the app code onto the box and running it is deploy.sh's job,
+# since this repo is private and cloud-init has no credentials to clone it.
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - ufw
+  - rsync
+
+# A swapfile gives the box a graceful degrade path under memory pressure
+# (slow instead of OOM-killed) -- cheap insurance for the same class of
+# problem that caused hours of local thrashing on an 8GB machine earlier in
+# this project. 4G is a safety margin on top of the 16GB RAM this box is
+# sized for (see deploy/README.md), not a substitute for enough RAM.
+swap:
+  filename: /swapfile
+  size: 4294967296
+
+runcmd:
+  # Docker Engine + compose plugin, official convenience script
+  - curl -fsSL https://get.docker.com | sh
+  - systemctl enable --now docker
+
+  # Only SSH is open to the world at this stage -- port 8000 is bound to
+  # 127.0.0.1 only (see docker-compose.prod.yaml), so there's nothing on a
+  # public port to firewall yet. 80/443 get opened in the TLS/reverse-proxy
+  # step, once there's something listening on them.
+  - ufw allow OpenSSH
+  - ufw --force enable
+
+  - mkdir -p /opt/oserai

@@ -1,0 +1,24 @@
+.git/
+.venv/
+__pycache__/
+*.pyc
+*.pt
+*.db
+*.db-wal
+*.db-shm
+out/
+desktop_app/build/
+desktop_app/dist/
+node_config.yaml
+train_node_config.yaml
+.node_state.json
+.train_node_state.json
+test_batch.jsonl
+test_batch2.jsonl
+test_batch3.jsonl
+
+# fetched at runtime by scripts/prepare_training_data.py -- only needed by
+# training scripts/agents, never by the coordinator itself (see
+# Dockerfile.coordinator)
+training/data/tinystories.txt
+training/data/dolly15k_chat.txt
