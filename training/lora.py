@@ -70,9 +70,23 @@ def _dtype_for_device(device: str) -> torch.dtype:
     return torch.float32
 
 
+def _from_pretrained_prefer_cache(loader, model_id: str, **kwargs):
+    # Try the local HF cache first, with no network call at all -- on a
+    # contributor's machine that already has this model, a from_pretrained()
+    # call with no local_files_only still reaches out to the Hub to check
+    # for updates, and on a network with broken/filtered IPv6 that HEAD/etag
+    # request can hang for tens of minutes with no error (observed: a
+    # SYN_SENT connection that never resolved). Only the very first
+    # download on a machine needs the network at all.
+    try:
+        return loader.from_pretrained(model_id, local_files_only=True, **kwargs)
+    except OSError:
+        return loader.from_pretrained(model_id, **kwargs)
+
+
 def load_tokenizer(base_model_id: str = DEFAULT_BASE_MODEL_ID) -> PreTrainedTokenizerBase:
     if base_model_id not in _tokenizer_cache:
-        tok = AutoTokenizer.from_pretrained(base_model_id)
+        tok = _from_pretrained_prefer_cache(AutoTokenizer, base_model_id)
         if tok.pad_token is None:
             tok.pad_token = tok.eos_token
         _tokenizer_cache[base_model_id] = tok
@@ -97,7 +111,7 @@ def load_frozen_base(
     dtype = dtype if dtype is not None else _dtype_for_device(device)
     key = (base_model_id, device, dtype)
     if key not in _base_model_cache:
-        model = AutoModelForCausalLM.from_pretrained(base_model_id, dtype=dtype)
+        model = _from_pretrained_prefer_cache(AutoModelForCausalLM, base_model_id, dtype=dtype)
         model.to(device)
         for p in model.parameters():
             p.requires_grad = False
