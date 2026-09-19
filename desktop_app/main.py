@@ -21,8 +21,7 @@ import socket
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -64,17 +63,11 @@ def save_settings(settings: dict) -> None:
 
 
 def make_tray_icon() -> QIcon:
-    # Drawn in code rather than shipped as an image asset -- keeps the app
-    # self-contained for PyInstaller packaging with zero bundled files.
-    pixmap = QPixmap(64, 64)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setBrush(QColor("#2a6df4"))
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawEllipse(4, 4, 56, 56)
-    painter.end()
-    return QIcon(pixmap)
+    # build.spec bundles assets/logo_tray.png next to the frozen executable
+    # (see its `datas` entry); sys._MEIPASS is where PyInstaller unpacks
+    # that at runtime. Running from source, it's just next to this file.
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return QIcon(str(base / "assets" / "logo_tray.png"))
 
 
 class MainWindow(QMainWindow):

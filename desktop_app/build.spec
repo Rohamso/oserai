@@ -17,6 +17,7 @@
 block_cipher = None
 
 import os
+import sys
 
 # Run from anywhere (repo root or desktop_app/ -- `pyinstaller build.spec`
 # is typically run from inside desktop_app/, per the README) and still find
@@ -27,12 +28,24 @@ import os
 # succeeds but the frozen app fails at startup with
 # "ModuleNotFoundError: No module named 'agent'".
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(SPEC)))
+ASSETS_DIR = os.path.join(REPO_ROOT, "desktop_app", "assets")
+
+# icon= wants a platform-native format: .icns on macOS (ignored on other
+# platforms), .ico on Windows -- this spec is the same file used for both
+# the local macOS build and the windows-latest CI build, so pick by
+# sys.platform rather than hardcoding one.
+if sys.platform == "darwin":
+    APP_ICON = os.path.join(ASSETS_DIR, "icon.icns")
+elif sys.platform == "win32":
+    APP_ICON = os.path.join(ASSETS_DIR, "icon.ico")
+else:
+    APP_ICON = None
 
 a = Analysis(
     ["main.py"],
     pathex=[REPO_ROOT],
     binaries=[],
-    datas=[],
+    datas=[(os.path.join(ASSETS_DIR, "logo_tray.png"), "assets")],
     # torch/transformers/peft do a lot of dynamic/lazy importing that
     # PyInstaller's static analysis can miss -- collect their submodules
     # explicitly rather than debugging missing-module errors one at a time.
@@ -77,6 +90,7 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
+    icon=APP_ICON,
 )
 
 coll = COLLECT(
@@ -96,6 +110,6 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name="OserAI-Trainer.app",
-    icon=None,
+    icon=APP_ICON,
     bundle_identifier="com.oserai.trainer",
 )
