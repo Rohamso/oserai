@@ -1,0 +1,66 @@
+name: Build desktop app
+
+# Manual only -- this packages desktop_app/ (agent/train_agent.py + a PySide6
+# GUI) into a standalone Windows .exe via PyInstaller. PyInstaller doesn't
+# cross-compile, so a real Windows runner is needed; there's no Windows
+# machine in this repo's normal dev loop to build it on otherwise.
+#
+# coordinator_url/run_id are patched into the two hardcoded QLineEdit
+# defaults in desktop_app/main.py before building, then discarded --
+# nothing here is committed back, so a pilot's specific coordinator address
+# never lands in source control.
+on:
+  workflow_dispatch:
+    inputs:
+      coordinator_url:
+        description: "Default Coordinator URL to bake in (e.g. http://100.x.y.z:8000)"
+        required: false
+        default: ""
+      run_id:
+        description: "Default training run ID to bake in"
+        required: false
+        default: ""
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements-desktop.txt
+
+      - name: Patch default coordinator URL / run ID
+        if: ${{ inputs.coordinator_url != '' || inputs.run_id != '' }}
+        shell: python
+        run: |
+          import pathlib
+          p = pathlib.Path("desktop_app/main.py")
+          text = p.read_text()
+          coordinator_url = ${{ toJSON(inputs.coordinator_url) }}
+          run_id = ${{ toJSON(inputs.run_id) }}
+          if coordinator_url:
+              text = text.replace(
+                  'QLineEdit("http://localhost:8000")',
+                  f'QLineEdit({coordinator_url!r})',
+              )
+          if run_id:
+              text = text.replace(
+                  "self.run_id_edit = QLineEdit()",
+                  f"self.run_id_edit = QLineEdit({run_id!r})",
+              )
+          p.write_text(text)
+
+      - name: Build with PyInstaller
+        working-directory: desktop_app
+        run: pyinstaller build.spec
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OserAI-Trainer-windows
+          path: desktop_app/dist/OserAI-Trainer/
+          retention-days: 14
