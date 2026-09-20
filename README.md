@@ -84,6 +84,51 @@ uvicorn coordinator.main:app --host 0.0.0.0 --port 8000   # coordinator_config.y
 
 Dashboard: http://localhost:8000/
 
+### Reaching the coordinator from your other devices
+
+`--host 0.0.0.0` makes the coordinator listen on every network interface,
+but that alone doesn't get a second or third machine talking to it —
+they need an address that actually reaches the host, and the host's
+firewall needs to let the connection through. Two ways to do that:
+
+**Option A — Tailscale (recommended).** Install [Tailscale](https://tailscale.com)
+on the coordinator host and on every contributor device, and sign them all
+into the same tailnet. Each machine gets a stable `100.x.y.z` address
+(`tailscale ip` on the host) that works from anywhere those devices can
+reach the internet — not just the same physical LAN — with no port
+forwarding or public exposure. This is also what the desktop app's build
+workflow already assumes: its `coordinator_url` input example is
+`http://100.x.y.z:8000`. Point every device's `coordinator_url` (desktop
+app field, or `train_node_config.yaml` / `node_config.yaml`) at
+`http://<host's-tailscale-ip>:8000`.
+
+**Option B — plain LAN IP.** Find the coordinator host's LAN IP
+(`ipconfig` on Windows, look for the active adapter's `IPv4 Address`; `ifconfig`
+or `ip addr` on macOS/Linux) and point other devices at
+`http://<host-LAN-IP>:8000` instead of `localhost`. Only works if every
+device is on the same physical network.
+
+Either way, the host's firewall still needs to allow the inbound
+connection. On Windows, starting the coordinator (`uvicorn`/`python.exe`
+listening on a new port) usually triggers a "Windows Defender Firewall has
+blocked some features" prompt the first time — click **Allow access**, and
+make sure **Private networks** is checked. Note that Windows categorizes
+some home Wi-Fi networks as **Public** rather than Private (check via
+`Get-NetConnectionProfile` in PowerShell) — avoid allowing the Public
+profile for this, since that exposes the port to the whole network the way
+a coffee shop or hotel Wi-Fi would be, not just your own devices; Tailscale
+sidesteps this entirely since its interface is always Private and never
+carries this exposure regardless of which Wi-Fi profile you're on.
+
+If the prompt doesn't appear (or you already dismissed it), add the rule
+manually from an **Administrator** PowerShell (`New-NetFirewallRule`
+fails with "Access is denied" otherwise) — scoped to Private only:
+
+```powershell
+New-NetFirewallRule -DisplayName "OserAI coordinator" -Direction Inbound `
+    -Protocol TCP -LocalPort 8000 -Action Allow -Profile Private
+```
+
 ## Setup — a node
 
 On the contributor machine, make sure [Ollama](https://ollama.com) is
