@@ -23,6 +23,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
+import psutil
 import torch
 from peft import LoraConfig, PeftModel, get_peft_model, get_peft_model_state_dict, set_peft_model_state_dict
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase
@@ -38,6 +39,15 @@ DEFAULT_INNER_LR = 1e-4
 DEFAULT_INNER_STEPS_H = 30
 DEFAULT_INNER_BATCH_SIZE = 4
 DEFAULT_BLOCK_SIZE = 512
+
+# Loading a ~1.5B-param model in fp32 on CPU needs ~6GB just for the weights,
+# more transiently while from_pretrained materializes them -- on a
+# contributor's machine without enough free RAM, that OOM doesn't raise a
+# catchable Python MemoryError, it crashes the process with a native access
+# violation deep in torch's CPU allocator (observed: PyInstaller-packaged
+# desktop app silently vanishing, no error dialog, no log line). Bail out
+# with a clear message before that happens rather than after.
+_MIN_FREE_RAM_GB_CPU_FP32 = 8.0
 
 
 @dataclass
@@ -121,7 +131,17 @@ def load_frozen_base(
     dtype = dtype if dtype is not None else _dtype_for_device(device)
     key = (base_model_id, device, dtype)
     if key not in _base_model_cache:
-        model = _from_pretrained_prefer_cache(AutoModelForCausalLM, base_model_id, dtype=dtype)
+        if device == "cpu" and dtype == torch.float32:
+            free_gb = psutil.virtual_memory().available / (1024**3)
+            if free_gb < _MIN_FREE_RAM_GB_CPU_FP32:
+                raise RuntimeError(
+                    f"Not enough free memory to load {base_model_id} on CPU: "
+                    f"{free_gb:.1f}GB free, need at least {_MIN_FREE_RAM_GB_CPU_FP32:.0f}GB. "
+                    "Close other applications and try again."
+                )
+        model = _from_pretrained_prefer_cache(
+            AutoModelForCausalLM, base_model_id, dtype=dtype, low_cpu_mem_usage=True,
+        )
         model.to(device)
         for p in model.parameters():
             p.requires_grad = False
