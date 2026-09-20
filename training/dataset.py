@@ -5,12 +5,21 @@ all use the same vocab, so checkpoints stay wire-compatible across datasets.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import tiktoken
 import torch
 
-DATA_DIR = Path(__file__).parent / "data"
+# Path(__file__).parent works when running from source, but this module
+# ships inside a PyInstaller-frozen app too (desktop_app), where pure-Python
+# modules like this one live inside an in-memory PYZ archive -- __file__
+# doesn't point to a real directory there, so a bundled data file has to be
+# resolved against sys._MEIPASS (where PyInstaller unpacks `datas`) instead.
+if hasattr(sys, "_MEIPASS"):
+    DATA_DIR = Path(sys._MEIPASS) / "training" / "data"
+else:
+    DATA_DIR = Path(__file__).parent / "data"
 
 VOCAB_SIZE = 50257
 

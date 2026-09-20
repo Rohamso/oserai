@@ -45,7 +45,15 @@ a = Analysis(
     ["main.py"],
     pathex=[REPO_ROOT],
     binaries=[],
-    datas=[(os.path.join(ASSETS_DIR, "logo_tray.png"), "assets")],
+    datas=[
+        (os.path.join(ASSETS_DIR, "logo_tray.png"), "assets"),
+        # training/dataset.py's DATA_DIR resolves against sys._MEIPASS when
+        # frozen (see its comment) -- without this, a contributor's machine
+        # crashes loading the training data right after the base model
+        # download finishes, since it never ran prepare_training_data.py
+        # itself and has no repo checkout to find these files in.
+        (os.path.join(REPO_ROOT, "training", "data"), os.path.join("training", "data")),
+    ],
     # torch/transformers/peft do a lot of dynamic/lazy importing that
     # PyInstaller's static analysis can miss -- collect their submodules
     # explicitly rather than debugging missing-module errors one at a time.
