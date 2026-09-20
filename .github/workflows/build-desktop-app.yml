@@ -34,6 +34,15 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-desktop.txt
 
+      - name: Fetch training data
+        # dolly15k_chat.txt/tinystories.txt are gitignored (fetched on
+        # demand, see prepare_training_data.py's docstring) -- a fresh CI
+        # checkout doesn't have them, so without this step build.spec's
+        # training/data datas entry only picks up tiny_shakespeare.txt
+        # (the one file actually committed), and the packaged app crashes
+        # loading the dolly_chat dataset on a contributor's machine.
+        run: python scripts/prepare_training_data.py
+
       - name: Patch default coordinator URL / run ID
         if: ${{ inputs.coordinator_url != '' || inputs.run_id != '' }}
         shell: python
