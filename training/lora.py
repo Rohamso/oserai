@@ -87,6 +87,16 @@ def _from_pretrained_prefer_cache(loader, model_id: str, **kwargs):
 def load_tokenizer(base_model_id: str = DEFAULT_BASE_MODEL_ID) -> PreTrainedTokenizerBase:
     if base_model_id not in _tokenizer_cache:
         tok = _from_pretrained_prefer_cache(AutoTokenizer, base_model_id)
+        if tok.chat_template is None:
+            # A previous interrupted download (e.g. a crash mid-fetch) can
+            # leave a local cache that's missing chat_template.jinja
+            # specifically -- local_files_only=True doesn't error on that,
+            # it just silently returns a tokenizer that raises the first
+            # time apply_chat_template() is actually called (training/
+            # lora.py's own prompt formatting, or chat_dataset.py's).
+            # Force one real network fetch to complete the cache rather
+            # than getting stuck reusing a broken partial one forever.
+            tok = AutoTokenizer.from_pretrained(base_model_id)
         if tok.pad_token is None:
             tok.pad_token = tok.eos_token
         _tokenizer_cache[base_model_id] = tok
