@@ -61,7 +61,7 @@ def fetch_tinystories(max_bytes: int, force: bool) -> None:
         raise RuntimeError("downloaded chunk contains no <|endoftext|> boundary -- try a larger --tinystories-mb")
     text = text[: last_eot + len(EOT)]
 
-    out_path.write_text(text)
+    out_path.write_text(text, encoding="utf-8")
     print(f"wrote {out_path} ({len(text) / 1e6:.1f}MB, {text.count(EOT)} stories)")
 
 
@@ -87,7 +87,7 @@ def fetch_dolly(force: bool) -> None:
         examples.append(CHAT_TEMPLATE.format(instruction=instruction) + response + "\n" + EOT)
 
     text = "\n".join(examples) + "\n"
-    out_path.write_text(text)
+    out_path.write_text(text, encoding="utf-8")
     print(f"wrote {out_path} ({len(text) / 1e6:.1f}MB, {len(examples)} examples)")
 
 

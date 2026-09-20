@@ -46,7 +46,7 @@ def load_dolly_chat_tokens(
 ) -> torch.Tensor:
     if not path.exists():
         raise FileNotFoundError(f"{path} not found -- run `python scripts/prepare_training_data.py` first")
-    examples = _parse_dolly_examples(path.read_text())
+    examples = _parse_dolly_examples(path.read_text(encoding="utf-8"))
     if max_examples is not None:
         examples = examples[:max_examples]
 

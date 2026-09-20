@@ -68,7 +68,7 @@ def load_dataset(name: str) -> torch.Tensor:
         raise FileNotFoundError(
             f"{path} not found -- run `python scripts/prepare_training_data.py` first"
         )
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     ids = get_encoder().encode(text, allowed_special={"<|endoftext|>"})
     return torch.tensor(ids, dtype=torch.long)
 
