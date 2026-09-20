@@ -210,8 +210,13 @@ crashes the process instead of raising, ...) before a contributor's machine
 does. It needs a real ~3GB download (first run only, cached under
 `~/.cache/huggingface` after) and the same free RAM `load_frozen_base`
 itself requires, so it's excluded from the default `pytest` run (opt in via
-the `smoke` marker) and only wired into CI as a pre-build check in the
-desktop app's build workflow, not on every push:
+the `smoke` marker). It's also wired into the desktop app's build workflow
+as a pre-build check, not on every push -- but GitHub's standard
+windows-latest runner typically doesn't have the 8GB free `load_frozen_base`
+itself requires, so that CI step only fails the build for a *real* failure,
+not for hitting the same RAM guard the runner itself can't clear. Run it
+locally on a machine with enough free RAM for real coverage before merging
+changes to `load_frozen_base`/`training/lora.py`:
 
 ```bash
 pytest -m smoke tests/test_lora_smoke.py
