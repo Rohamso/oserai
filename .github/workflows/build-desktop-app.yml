@@ -43,6 +43,23 @@ jobs:
         # loading the dolly_chat dataset on a contributor's machine.
         run: python scripts/prepare_training_data.py
 
+      - name: Cache Hugging Face model download
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-cache-qwen2.5-1.5b-instruct
+
+      - name: Real-model training smoke test
+        # Everything else in tests/ exercises dispatch/aggregation against
+        # small hand-built tensors -- fast, but nothing there ever actually
+        # loads the real base model or runs a real local step, so failures
+        # specific to that path (bad from_pretrained kwargs, an OOM that
+        # crashes the process instead of raising, ...) had no test to catch
+        # them before a contributor's machine did. Run it here, on the same
+        # OS the packaged app ships for, before spending time building and
+        # uploading an artifact that can't actually complete a round.
+        run: python -m pytest -m smoke tests/test_lora_smoke.py -v
+
       - name: Patch default coordinator URL / run ID
         if: ${{ inputs.coordinator_url != '' || inputs.run_id != '' }}
         shell: python

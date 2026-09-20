@@ -201,6 +201,22 @@ tensors rather than a real base model. Ollama is mocked in
 if torch isn't installed — no local Ollama server, GPU, or ~3GB model
 download needed to run the suite.
 
+`tests/test_lora_smoke.py` is the one exception: a real end-to-end LoRA
+round against the actual base model (load the frozen base, build the
+adapter, run real local steps, round-trip the delta through the same wire
+format a training agent uploads) — the only thing that actually catches a
+real-world failure in that path (bad `from_pretrained` kwargs, an OOM that
+crashes the process instead of raising, ...) before a contributor's machine
+does. It needs a real ~3GB download (first run only, cached under
+`~/.cache/huggingface` after) and the same free RAM `load_frozen_base`
+itself requires, so it's excluded from the default `pytest` run (opt in via
+the `smoke` marker) and only wired into CI as a pre-build check in the
+desktop app's build workflow, not on every push:
+
+```bash
+pytest -m smoke tests/test_lora_smoke.py
+```
+
 ## Training (DiLoCo) — distributed training, not just inference
 
 A second, independent capability: train a model across your own
