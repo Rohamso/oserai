@@ -32,7 +32,10 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install -r requirements-desktop.txt
+        # pytest itself only lives in requirements.txt (the base
+        # coordinator/agent deps), which requirements-desktop.txt doesn't
+        # pull in -- needed here to run the smoke test step below.
+        run: pip install -r requirements-desktop.txt pytest
 
       - name: Fetch training data
         # dolly15k_chat.txt/tinystories.txt are gitignored (fetched on
