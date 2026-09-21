@@ -94,10 +94,23 @@ def ensure_registered(client: CoordinatorClient, config: TrainAgentConfig) -> No
 
 
 def _heartbeat_loop(client: CoordinatorClient, state: AgentState, interval_s: float) -> None:
+    # This runs on its own daemon thread for the lifetime of a round-polling
+    # loop that can exit out from under it at any time (error, stop, or a
+    # normal round finishing while shutdown is requested) -- and that loop's
+    # `finally: client.close()` closes the *same* shared client. A closed
+    # httpx.Client raises RuntimeError, not httpx.HTTPError, on the next
+    # call, which heartbeat()'s own except clause doesn't catch -- an
+    # unhandled exception here kills this thread silently (no console
+    # window to print the traceback to), and the node just stops
+    # heartbeating with no visible error anywhere. Broad except keeps this
+    # loop alive regardless of what state the client ends up in.
     while not state.shutdown_requested.is_set():
-        cpu_pct = psutil.cpu_percent(interval=None)
-        ram_free_mb = psutil.virtual_memory().available / (1024 * 1024)
-        client.heartbeat(status=state.status, cpu_pct=cpu_pct, ram_free_mb=ram_free_mb)
+        try:
+            cpu_pct = psutil.cpu_percent(interval=None)
+            ram_free_mb = psutil.virtual_memory().available / (1024 * 1024)
+            client.heartbeat(status=state.status, cpu_pct=cpu_pct, ram_free_mb=ram_free_mb)
+        except Exception as exc:  # noqa: BLE001 -- must never take this thread down silently
+            log_event(logger, "heartbeat_failed", error=str(exc))
         state.shutdown_requested.wait(interval_s)
 
 
