@@ -68,3 +68,23 @@ def test_real_lora_round_completes():
     assert restored.keys() == delta.keys()
     for key in delta:
         assert torch.allclose(restored[key], delta[key])
+
+    # The actual upload path (agent/train_agent.py's run_round_lora) sends
+    # fp16, not this fp32 default -- verify the compressed wire format on a
+    # real delta specifically, not just a hand-built tensor: it should
+    # round-trip through average_state_dicts's .float() upcast losslessly
+    # enough to train on, and the payload should actually shrink.
+    fp32_bytes = state_dict_to_bytes(delta)
+    fp16_bytes = state_dict_to_bytes(delta, dtype=torch.float16)
+    assert len(fp16_bytes) < len(fp32_bytes) * 0.6
+
+    restored_fp16 = bytes_to_state_dict(fp16_bytes)
+    assert restored_fp16.keys() == delta.keys()
+    for key in delta:
+        assert restored_fp16[key].dtype == torch.float16
+        assert torch.isfinite(restored_fp16[key]).all()
+        # fp16 has ~3 decimal digits of precision -- LoRA deltas after just
+        # a couple of steps are small, so an absolute tolerance this loose
+        # would hide a real bug; this is checking "close to the fp32
+        # original," not "bit-identical."
+        assert torch.allclose(restored_fp16[key].float(), delta[key], atol=1e-3, rtol=1e-2)

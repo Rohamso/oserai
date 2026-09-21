@@ -140,8 +140,12 @@ def run_round_lora(
         )
         wall_time_s = time.time() - t0
 
+        # fp16 halves the delta's upload size for free -- outer_optim.py's
+        # average_state_dicts() already upcasts every tensor via .float()
+        # before averaging, so the coordinator needs no separate
+        # decompression step to consume this.
         result = client.upload_delta(
-            round_id, state_dict_to_bytes(delta),
+            round_id, state_dict_to_bytes(delta, dtype=torch.float16),
             local_loss=last_loss, local_steps_completed=round_info["inner_steps_h"], wall_time_s=wall_time_s,
         )
         if result is None:
@@ -187,8 +191,10 @@ def run_round(
         delta = {k: (start_sd[k] - end_sd[k]).cpu() for k in start_sd}
         wall_time_s = time.time() - t0
 
+        # See run_round_lora's identical comment: fp16 halves upload size,
+        # average_state_dicts() upcasts back to fp32 on the coordinator.
         result = client.upload_delta(
-            round_id, state_dict_to_bytes(delta),
+            round_id, state_dict_to_bytes(delta, dtype=torch.float16),
             local_loss=last_loss or 0.0,
             local_steps_completed=round_info["inner_steps_h"],
             wall_time_s=wall_time_s,
