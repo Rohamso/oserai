@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import os
 import time
 import uuid
 from contextlib import aclosing, asynccontextmanager
@@ -17,11 +18,12 @@ from typing import Literal
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
 from chat_service.config import ChatConfig
 from chat_service.inference import ChatRuntime
+from chat_service.knowledge import guide_context, load_guides, match_guide
 from chat_service.usage import QuotaExceeded, UsageStore
 
 UNAVAILABLE = "Chat is coming online. Please check back soon."
@@ -53,6 +55,8 @@ def event(name: str, payload: dict) -> str:
 def create_app(config: ChatConfig | None = None, upstream: httpx.AsyncClient | None = None) -> FastAPI:
     settings = config or ChatConfig.load()
     runtime = ChatRuntime(settings)
+    guides = load_guides()
+    render_url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
 
     @asynccontextmanager
     async def lifespan(app):
@@ -93,6 +97,13 @@ def create_app(config: ChatConfig | None = None, upstream: httpx.AsyncClient | N
     async def health():
         return {"ok": True}
 
+    @app.get("/guides/{slug}", response_class=PlainTextResponse, name="read_guide")
+    async def read_guide(slug: str):
+        guide = guides.get(slug)
+        if guide is None:
+            raise HTTPException(404, "Guide not found.")
+        return f"{guide.title}\n\n{guide.text}\n"
+
     @app.get("/api/status")
     async def status(authorization: str | None = Header(None)):
         authorize(authorization)
@@ -123,6 +134,7 @@ def create_app(config: ChatConfig | None = None, upstream: httpx.AsyncClient | N
         # Recheck after awaiting the upstream model inventory.
         if app.state.active >= settings.max_concurrent:
             raise HTTPException(503, "All chat slots are busy. Please try again shortly.")
+        source = match_guide(guides, [message.content for message in body.messages if message.role == "user"])
         request_id = str(uuid.uuid4())
         try:
             app.state.usage.reserve(request_id, x_visitor_id, x_visitor_network, settings)
@@ -148,6 +160,7 @@ def create_app(config: ChatConfig | None = None, upstream: httpx.AsyncClient | N
                                 "When asked who you are, introduce yourself as OserAI. "
                                 f"When asked what powers this chat, say it uses "
                                 f"{settings.model_name} served by {settings.inference_backend}."
+                                + guide_context(source)
                             ),
                         },
                     ]
@@ -167,6 +180,12 @@ def create_app(config: ChatConfig | None = None, upstream: httpx.AsyncClient | N
                             finished = finished or chunk.finished
                     if not finished or not answer.strip():
                         raise ValueError("Incomplete completion")
+                    if source:
+                        guide_url = (
+                            f"{render_url}/guides/{source.slug}"
+                            if render_url else request.url_for("read_guide", slug=source.slug)
+                        )
+                        yield "token", {"text": f"\n\n**Guide consulted**\n- [{source.title}]({guide_url})"}
                 outcome = "completed"
                 yield "done", {"completion_tokens": tokens, "elapsed_s": round(time.monotonic() - started, 2)}
             except (httpx.HTTPError, TimeoutError, ValueError, TypeError, AttributeError) as exc:
