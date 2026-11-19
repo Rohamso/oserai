@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg"><defs>
+<symbol id="mark-small" viewBox="0 0 180 180"><g fill="none" stroke="currentColor" stroke-width="15" stroke-linecap="round"><circle cx="90" cy="90" r="44" stroke-dasharray="0 17.27"/><circle cx="90" cy="90" r="62" stroke-dasharray="0 19.48" transform="rotate(9 90 90)"/></g></symbol>
+<symbol id="mark" viewBox="0 0 180 180"><g fill="none" stroke="currentColor" stroke-width="17" stroke-linecap="round"><circle cx="90" cy="90" r="44" stroke-dasharray="0 21.55"/><circle cx="90" cy="90" r="66" stroke-dasharray="0 22.19" transform="rotate(9 90 90)"/></g></symbol>
+<symbol id="mark-hero" viewBox="-100 -100 200 200"><g fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round"><circle r="42" stroke-dasharray="0 16.49"/><circle r="56" stroke-dasharray="0 17.59" transform="rotate(9)"/><circle r="70" stroke-dasharray="0 16.91" transform="rotate(4)"/></g></symbol>
+<symbol id="ring-dotted" viewBox="0 0 100 100"><circle cx="50" cy="50" r="32" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round" stroke-dasharray="0 20.1" transform="rotate(-70 50 50)"/></symbol>
+<symbol id="ring-open" viewBox="0 0 100 100"><circle cx="50" cy="50" r="32" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round" stroke-dasharray="150 51" transform="rotate(-70 50 50)"/></symbol>
+<symbol id="ring-solid" viewBox="0 0 100 100"><circle cx="50" cy="50" r="32" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="butt" stroke-dasharray="172 29" transform="rotate(-70 50 50)"/></symbol>
+<symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4 4"/></symbol>
+<symbol id="arrow" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
+<symbol id="arrow-right" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+<symbol id="menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+<symbol id="close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+<symbol id="spark" viewBox="0 0 24 24"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z"/></symbol>
+<symbol id="compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m16 8-2 6-6 2 2-6Z"/></symbol>
+<symbol id="pen" viewBox="0 0 24 24"><path d="m15 4 5 5L9 20H4v-5Zm-9 9 5 5M13 6l5 5"/></symbol>
+<symbol id="code" viewBox="0 0 24 24"><path d="m8 6-6 6 6 6m8-12 6 6-6 6M14 3l-4 18"/></symbol>
+<symbol id="copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M15 8V4H4v11h4"/></symbol>
+<symbol id="download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></symbol>
+<symbol id="trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></symbol>
+<symbol id="info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v.5"/></symbol>
+<symbol id="lock" viewBox="0 0 24 24"><path d="M6 11h12v10H6zM9 11V8a3 3 0 0 1 6 0v3m-3 4v2"/></symbol>
+<symbol id="retry" viewBox="0 0 24 24"><path d="M4 10a8 8 0 1 1 1 8M4 4v6h6"/></symbol>
+<symbol id="check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+<symbol id="network" viewBox="0 0 24 24"><circle cx="5" cy="6" r="2.5"/><circle cx="19" cy="6" r="2.5"/><circle cx="12" cy="19" r="2.5"/><path d="M7.5 6h9M6.3 8.2l4.4 8.5m6.9-8.5-4.4 8.5"/></symbol>
+</defs></svg>

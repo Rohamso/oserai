@@ -3,7 +3,7 @@
   const $ = (id) => document.getElementById(id);
   const STORAGE = "oserai.chat.v1";
   let conversations = [], currentId = null, generation = null, csrf = "", ready = false, maxInput = 16000;
-  let toastTimer, deleteAction;
+  let toastTimer, deleteAction, confirmTrigger;
   const icon = (name) => `<svg class="icon" aria-hidden="true"><use href="assets/icons.svg#${name}"></use></svg>`;
   const escape = (text) => String(text).replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
   const uid = () => crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -48,15 +48,35 @@
     if (open) $("chat-search").focus();
   }
 
+  function closeSidebar() {
+    sidebar(false);
+    if (innerWidth <= 760) $("menu-button").focus();
+  }
+
+  function confirmConversation(chat) {
+    confirmDelete(false, () => {
+      if (currentId === chat.id) { stop(); currentId = null; }
+      conversations = conversations.filter((c) => c.id !== chat.id);
+      persist(); render();
+    });
+  }
+
   function history() {
     const filter = $("chat-search").value.toLowerCase().trim();
     const matches = conversations.filter((chat) => !filter || chat.title.toLowerCase().includes(filter) || chat.messages.some((m) => m.content.toLowerCase().includes(filter)));
     $("chat-list").replaceChildren();
     if (!matches.length) {
-      const p = document.createElement("p");
-      p.className = "history-empty";
-      p.textContent = filter ? "No conversations found." : "A good question is a beginning.\nYour conversations will appear here.";
-      $("chat-list").append(p);
+      const empty = document.createElement("div");
+      empty.className = "history-empty";
+      if (filter) empty.textContent = "No conversations found.";
+      else {
+        const title = document.createElement("strong");
+        title.textContent = "Nothing saved yet";
+        const detail = document.createElement("p");
+        detail.textContent = "Your conversations will appear here. They’re saved in this browser.";
+        empty.append(title, detail);
+      }
+      $("chat-list").append(empty);
     }
     for (const chat of matches) {
       const item = document.createElement("div");
@@ -65,17 +85,13 @@
       select.className = "chat-item-main";
       select.textContent = chat.title;
       select.title = chat.title;
-      if (chat.id === currentId) select.setAttribute("aria-current", "true");
+      if (chat.id === currentId) select.setAttribute("aria-current", "page");
       select.addEventListener("click", () => { stop(); currentId = chat.id; render(); sidebar(false); });
       const remove = document.createElement("button");
-      remove.className = "chat-delete";
+      remove.className = "icon-button chat-delete";
       remove.innerHTML = icon("trash");
       remove.setAttribute("aria-label", `Delete ${chat.title}`);
-      remove.addEventListener("click", () => confirmDelete(false, () => {
-        if (currentId === chat.id) { stop(); currentId = null; }
-        conversations = conversations.filter((c) => c.id !== chat.id);
-        persist(); render();
-      }));
+      remove.addEventListener("click", () => confirmConversation(chat));
       item.append(select, remove); $("chat-list").append(item);
     }
   }
@@ -123,6 +139,10 @@
   function renderMessages() {
     const chat = current();
     const hasMessages = Boolean(chat?.messages.length);
+    document.querySelector("main").classList.toggle("has-conversation", hasMessages);
+    $("welcome-bar").hidden = hasMessages;
+    $("conversation-bar").hidden = !hasMessages;
+    $("conversation-title").textContent = hasMessages ? chat.title : "";
     $("welcome").hidden = hasMessages;
     $("messages").hidden = !hasMessages;
     $("messages").replaceChildren();
@@ -138,11 +158,14 @@
       if (message.role === "user") {
         body.textContent = message.content; row.append(body);
       } else {
-        row.innerHTML = '<svg class="assistant-mark" aria-hidden="true"><use href="assets/icons.svg#mark"></use></svg>';
-        const label = document.createElement("span"); label.className = "assistant-label"; label.textContent = "oserai";
-        if (!message.content && message.state === "pending") body.innerHTML = '<div class="typing" aria-label="Preparing a reply"><span></span><span></span><span></span></div>';
+        const header = document.createElement("div");
+        header.className = "assistant-header";
+        header.innerHTML = '<svg class="assistant-mark" viewBox="0 0 180 180" fill="none" stroke="currentColor" stroke-width="17" stroke-linecap="round" aria-hidden="true"><circle cx="90" cy="90" r="44" stroke-dasharray="0 21.55"/><circle cx="90" cy="90" r="66" stroke-dasharray="0 22.19" transform="rotate(9 90 90)"/></svg><span class="assistant-label">OSERAI</span>';
+        if (!message.content && message.state === "pending") {
+          body.innerHTML = '<div class="typing" role="status"><span class="typing-dots" aria-hidden="true"><span></span><span></span><span></span></span><span>Preparing your reply…</span></div>';
+        }
         else body.innerHTML = markdown(message.content);
-        content.append(label, body);
+        content.append(header, body);
         if (["error", "interrupted"].includes(message.state)) {
           const error = document.createElement("p"); error.className = "message-error";
           error.textContent = message.error || "Reply stopped. You can try again when you're ready.";
@@ -176,8 +199,11 @@
     $("stop-button").hidden = !generation;
     $("character-count").textContent = `${$("prompt").value.length.toLocaleString()} / ${maxInput.toLocaleString()}`;
     $("character-count").hidden = length < maxInput * .8;
-    $("prompt").style.height = "auto";
-    $("prompt").style.height = `${Math.min($("prompt").scrollHeight, 180)}px`;
+    const prompt = $("prompt");
+    const rows = current()?.messages.length || innerWidth <= 760 ? 1 : 3;
+    if (prompt.rows !== rows) prompt.rows = rows;
+    prompt.style.height = "auto";
+    prompt.style.height = `${Math.min(prompt.scrollHeight, 180)}px`;
   }
 
   function render() { history(); renderMessages(); controls(); }
@@ -185,7 +211,7 @@
 
   function newChat() {
     stop(); currentId = null; $("prompt").value = ""; $("chat-search").value = "";
-    render(); sidebar(false); $("prompt").focus();
+    render(); sidebar(false); $("conversation-area").scrollTop = 0; $("prompt").focus();
   }
 
   function stop() { if (generation) generation.abort(); }
@@ -202,8 +228,11 @@
       $("prompt").maxLength = maxInput;
       $("model-name").textContent = status.model_label || "OserAI Chat";
     } catch { ready = false; }
-    $("network-status").className = `network-status ${ready ? "ready" : "offline"}`;
-    $("network-status").lastElementChild.textContent = ready ? "Ready to explore" : "Coming online";
+    document.querySelectorAll("[data-network-status]").forEach((status) => {
+      status.classList.toggle("ready", ready);
+      status.classList.toggle("offline", !ready);
+      status.lastElementChild.textContent = ready ? "Network · Online" : "Network · Offline";
+    });
     $("availability").hidden = ready;
     $("availability").textContent = ready ? "" : "Chat is coming online. Please check back soon.";
     controls();
@@ -296,11 +325,14 @@
     }
   }
 
-  function confirmDelete(all, action) {
+  function confirmDelete(all, action, trigger = document.activeElement) {
     $("confirm-dialog").querySelector("h2").textContent = all ? "Clear all conversations?" : "Clear this conversation?";
-    $("confirm-dialog").querySelector("p").textContent = all ? "This removes every saved conversation from this browser." : "This removes the saved conversation from this browser.";
+    $("confirm-description").textContent = all ? "This removes every saved conversation from this browser." : "This removes the saved conversation from this browser.";
     $("confirm-delete").textContent = all ? "Clear all conversations" : "Delete conversation";
-    deleteAction = action; $("confirm-dialog").showModal();
+    deleteAction = action;
+    confirmTrigger = trigger;
+    $("confirm-dialog").showModal();
+    $("confirm-cancel").focus();
   }
 
   $("chat-form").addEventListener("submit", (event) => { event.preventDefault(); send(); });
@@ -310,17 +342,41 @@
   });
   $("stop-button").addEventListener("click", stop);
   $("new-chat").addEventListener("click", newChat);
+  $("mobile-new-chat").addEventListener("click", newChat);
   $("chat-search").addEventListener("input", history);
   $("menu-button").addEventListener("click", () => sidebar(true));
-  $("sidebar-scrim").addEventListener("click", () => sidebar(false));
+  $("sidebar-scrim").addEventListener("click", closeSidebar);
+  $("close-sidebar").addEventListener("click", closeSidebar);
   $("about-button").addEventListener("click", () => { sidebar(false); $("about-dialog").showModal(); });
   document.querySelectorAll("[data-close-dialog]").forEach((button) => button.addEventListener("click", () => button.closest("dialog").close()));
-  $("clear-history").addEventListener("click", () => {
+  function clearSavedConversations(trigger) {
     $("about-dialog").close();
-    confirmDelete(true, () => { stop(); conversations = []; currentId = null; persist(); render(); toast("Saved conversations cleared."); });
+    confirmDelete(true, () => { stop(); conversations = []; currentId = null; persist(); render(); toast("Saved conversations cleared."); }, trigger);
+  }
+  $("clear-history").addEventListener("click", () => {
+    clearSavedConversations(innerWidth <= 760 ? $("menu-button") : $("about-button"));
+  });
+  $("clear-history-inline").addEventListener("click", (event) => clearSavedConversations(event.currentTarget));
+  $("delete-current-chat").addEventListener("click", () => {
+    const chat = current();
+    if (chat) confirmConversation(chat);
   });
   $("confirm-cancel").addEventListener("click", () => $("confirm-dialog").close());
   $("confirm-delete").addEventListener("click", () => { deleteAction?.(); $("confirm-dialog").close(); });
+  $("confirm-dialog").addEventListener("close", () => {
+    deleteAction = null;
+    const target = confirmTrigger?.isConnected && confirmTrigger.getClientRects().length ? confirmTrigger : $("prompt");
+    confirmTrigger = null;
+    target.focus();
+  });
+  $("confirm-dialog").addEventListener("keydown", (event) => {
+    if (event.key !== "Tab") return;
+    const keep = $("confirm-cancel"), remove = $("confirm-delete");
+    if ((event.shiftKey && document.activeElement === keep) || (!event.shiftKey && document.activeElement === remove)) {
+      event.preventDefault();
+      (event.shiftKey ? remove : keep).focus();
+    }
+  });
   document.querySelectorAll(".suggestion").forEach((button) => button.addEventListener("click", () => {
     $("prompt").value = button.dataset.prompt; controls(); $("prompt").focus();
   }));
@@ -332,12 +388,19 @@
     link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") sidebar(false);
+    if (event.key === "Escape" && $("sidebar").classList.contains("open") && !document.querySelector("dialog[open]")) {
+      closeSidebar();
+    }
     if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "o") { event.preventDefault(); newChat(); }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); if (innerWidth <= 760) sidebar(true); $("chat-search").focus(); }
   });
+  if (!/Mac|iPhone|iPad/.test(navigator.platform)) $("new-chat-shortcut").textContent = "Ctrl ⇧ O";
   load(); sidebar(false); render(); availability();
-  window.addEventListener("resize", () => { if (innerWidth > 760) sidebar(false); else if (!$("sidebar").classList.contains("open")) $("sidebar").inert = true; });
+  window.addEventListener("resize", () => {
+    if (innerWidth > 760) sidebar(false);
+    else if (!$("sidebar").classList.contains("open")) $("sidebar").inert = true;
+    controls();
+  });
   setInterval(() => { if (document.visibilityState === "visible") availability(); }, 30000);
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") availability(); });
 })();

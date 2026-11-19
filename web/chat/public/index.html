@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#F7F4EE">
+  <meta name="description" content="Think, write, learn and build with OserAI Chat.">
+  <title>OserAI — A little curiosity goes a long way.</title>
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&amp;family=Albert+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/app.css">
+  <script src="assets/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#prompt">Skip to message</a>
+  <button class="sidebar-scrim" id="sidebar-scrim" type="button" aria-label="Close conversations" tabindex="-1" hidden></button>
+
+  <aside class="sidebar" id="sidebar" aria-label="Conversations">
+    <div class="sidebar-header">
+      <a class="brand" href="./" aria-label="OserAI home">
+        <svg class="brand-mark" aria-hidden="true"><use href="assets/icons.svg#mark-small"></use></svg>
+        <span class="wordmark">oserai</span><span class="beta-tag">Preview</span>
+      </a>
+      <button class="icon-button drawer-close" id="close-sidebar" type="button" aria-label="Close conversations">
+        <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#close"></use></svg>
+      </button>
+    </div>
+
+    <button class="new-chat" id="new-chat" type="button">
+      <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#plus"></use></svg>
+      <span>New conversation</span><kbd class="shortcut" id="new-chat-shortcut" aria-hidden="true">⌘ ⇧ O</kbd>
+    </button>
+
+    <div class="history">
+      <label class="search-box">
+        <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#search"></use></svg>
+        <input id="chat-search" type="search" placeholder="Search conversations" aria-label="Search conversations" autocomplete="off">
+      </label>
+      <p class="eyebrow history-heading">Your conversations</p>
+      <nav id="chat-list" class="chat-list" aria-label="Saved conversations"></nav>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="sidebar-status">
+        <span id="network-status" class="network-status" data-network-status role="status">
+          <span class="status-dot" aria-hidden="true"></span><span>Network · Connecting</span>
+        </span>
+        <button id="about-button" class="icon-button" type="button" aria-label="About OserAI Chat">
+          <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#info"></use></svg>
+        </button>
+      </div>
+      <p>OserAI is building a network of independent computers. This preview uses hosted compute.</p>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="mobile-bar">
+        <button id="menu-button" class="icon-button" type="button" aria-label="Open conversations" aria-expanded="false" aria-controls="sidebar">
+          <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#menu"></use></svg>
+        </button>
+        <a class="brand" href="./" aria-label="OserAI home">
+          <svg class="brand-mark" aria-hidden="true"><use href="assets/icons.svg#mark-small"></use></svg>
+          <span class="wordmark">oserai</span><span class="beta-tag">Preview</span>
+        </a>
+        <button id="mobile-new-chat" class="icon-button" type="button" aria-label="New conversation">
+          <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#plus"></use></svg>
+        </button>
+      </div>
+      <div class="topbar-welcome" id="welcome-bar">
+        <span class="eyebrow">OserAI Network · Chat Preview</span>
+        <a class="info-link" href="#how-replies-are-made">How replies are made</a>
+      </div>
+      <div class="topbar-conversation" id="conversation-bar" hidden>
+        <h1 id="conversation-title"></h1>
+        <div class="conversation-actions">
+          <button id="export-chat" class="icon-button outline-button" type="button" aria-label="Download conversation" title="Download conversation">
+            <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#download"></use></svg>
+          </button>
+          <button id="delete-current-chat" class="icon-button outline-button" type="button" aria-label="Delete current conversation" title="Delete current conversation">
+            <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#trash"></use></svg>
+          </button>
+        </div>
+      </div>
+      <span class="sr-only" id="model-name">OserAI Chat</span>
+    </header>
+
+    <div class="conversation-area" id="conversation-area">
+      <div class="chat-workspace">
+        <section class="welcome" id="welcome" aria-labelledby="welcome-title">
+          <span class="network-status mobile-status" data-network-status role="status">
+            <span class="status-dot" aria-hidden="true"></span><span>Network · Connecting</span>
+          </span>
+          <svg class="welcome-mark" aria-hidden="true"><use href="assets/icons.svg#mark-hero"></use></svg>
+          <p class="eyebrow welcome-eyebrow">Independent minds. Shared intelligence.</p>
+          <h1 id="welcome-title">What’s on your <em>mind today?</em></h1>
+          <p class="welcome-description">Big questions, small beginnings.<br> Let’s see where a conversation takes you.</p>
+
+          <div class="suggestions">
+            <button class="suggestion" type="button" data-prompt="Explain a complex idea in a simple way. Start with how neural networks learn, using an everyday analogy.">
+              <svg class="ring ink" aria-hidden="true"><use href="assets/icons.svg#ring-dotted"></use></svg>
+              <span><strong>Make something clear</strong><span>A new way to understand a big idea</span></span>
+            </button>
+            <button class="suggestion" type="button" data-prompt="Help me turn an idea into a practical plan. Ask me a few questions about what I want to create, then suggest a first step.">
+              <svg class="ring saffron" aria-hidden="true"><use href="assets/icons.svg#ring-open"></use></svg>
+              <span><strong>Find a starting point</strong><span>Turn a what-if into a what’s-next</span></span>
+            </button>
+            <button class="suggestion" type="button" data-prompt="Be my writing partner. Ask me what I am working on, who it is for and the tone I want, then help me draft it.">
+              <svg class="ring terracotta" aria-hidden="true"><use href="assets/icons.svg#ring-dotted"></use></svg>
+              <span><strong>Put it into words</strong><span>Find the right words for your thoughts</span></span>
+            </button>
+            <button class="suggestion" type="button" data-prompt="Help me build something useful with code. Ask about my idea and experience level, then suggest a small project we can work through together.">
+              <svg class="ring jade" aria-hidden="true"><use href="assets/icons.svg#ring-solid"></use></svg>
+              <span><strong>Build something useful</strong><span>A little code can go a long way</span></span>
+            </button>
+          </div>
+        </section>
+
+        <section id="messages" class="messages" aria-label="Conversation" hidden></section>
+
+        <div class="composer-dock">
+          <div class="composer-inner">
+            <p id="availability" class="availability" role="status" hidden></p>
+            <form id="chat-form" class="composer">
+              <label class="sr-only" for="prompt">Your message</label>
+              <textarea id="prompt" placeholder="Your message" rows="3" maxlength="16000" enterkeyhint="send"></textarea>
+              <div class="composer-toolbar">
+                <span class="keyboard-hint">Enter to send · Shift + Enter for a new line</span>
+                <div class="composer-actions">
+                  <span id="character-count" class="character-count" hidden></span>
+                  <button id="send-button" class="send-button" type="submit" aria-label="Send message" disabled>
+                    <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#arrow"></use></svg>
+                  </button>
+                  <button id="stop-button" class="send-button stop-button" type="button" aria-label="Stop generating" hidden><span></span></button>
+                </div>
+              </div>
+            </form>
+            <div class="composer-note">
+              <span class="keyboard-hint dock-hint">Enter to send · Shift + Enter for a new line</span>
+              <span class="save-notice">
+                <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#lock"></use></svg>
+                <span class="save-notice-full">Conversations are saved in this browser only.</span>
+                <span class="save-notice-short">Saved in this browser</span>
+                <span class="save-notice-mobile">Saved in this browser only</span>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <section class="info-section" id="how-replies-are-made" aria-labelledby="info-title" tabindex="-1">
+        <div class="info-inner">
+          <p class="eyebrow">A different kind of connection</p>
+          <h2 id="info-title">Intelligence, shared.</h2>
+          <div class="info-grid">
+            <div>
+              <svg class="ring ink" aria-hidden="true"><use href="assets/icons.svg#ring-dotted"></use></svg>
+              <h3>How replies are made</h3>
+              <p>Your message is sent to a hosted AI model to generate a reply in this preview.</p>
+            </div>
+            <div>
+              <svg class="ring saffron" aria-hidden="true"><use href="assets/icons.svg#ring-open"></use></svg>
+              <h3>Independent computers</h3>
+              <p>OserAI is building a shared network where independently operated computers can generate replies.</p>
+            </div>
+            <div>
+              <svg class="ring jade" aria-hidden="true"><use href="assets/icons.svg#ring-solid"></use></svg>
+              <h3>Your conversations</h3>
+              <p>Chat history is saved in this browser. Anyone using this browser profile can access its saved conversations.</p>
+            </div>
+          </div>
+          <div class="privacy-bar">
+            <p>Want a clean slate on this device?</p>
+            <button id="clear-history-inline" class="secondary-button" type="button">Clear all saved conversations</button>
+          </div>
+        </div>
+      </section>
+
+      <footer class="site-footer">
+        <div class="footer-inner">
+          <span><svg class="footer-mark" aria-hidden="true"><use href="assets/icons.svg#mark"></use></svg>OserAI Network</span>
+          <em>Made for curious minds.</em>
+        </div>
+      </footer>
+    </div>
+  </main>
+
+  <dialog id="about-dialog" class="dialog" aria-labelledby="about-title" aria-modal="true">
+    <div class="dialog-header">
+      <p class="eyebrow">A different kind of connection</p>
+      <button class="icon-button" type="button" data-close-dialog aria-label="Close" autofocus>
+        <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#close"></use></svg>
+      </button>
+    </div>
+    <h2 id="about-title">Intelligence, shared.</h2>
+    <p>OserAI is building a shared network of independent computers. Your messages in this preview are sent to a hosted AI model to generate replies.</p>
+    <div class="privacy-note"><h3>Your conversations</h3><p>Chat history is saved in this browser. Anyone using this browser profile can access its saved conversations.</p></div>
+    <button id="clear-history" class="secondary-button" type="button">Clear all saved conversations</button>
+  </dialog>
+
+  <dialog id="confirm-dialog" class="dialog confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-description">
+    <p class="eyebrow danger-eyebrow">This can’t be undone</p>
+    <h2 id="confirm-title">Clear this conversation?</h2>
+    <p id="confirm-description">This removes the saved conversation from this browser.</p>
+    <div class="dialog-actions">
+      <button class="secondary-button" id="confirm-cancel" type="button" autofocus>Keep it</button>
+      <button class="danger-button" id="confirm-delete" type="button">Delete conversation</button>
+    </div>
+  </dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <div class="sr-only" role="status" id="screen-status" aria-live="polite"></div>
+</body>
+</html>
