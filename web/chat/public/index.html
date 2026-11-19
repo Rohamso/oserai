@@ -10,8 +10,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&amp;family=Albert+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="assets/app.css">
-  <script src="assets/app.js" defer></script>
+  <link rel="stylesheet" href="assets/app.css?v=pilot-accounts">
+  <script src="assets/app.js?v=pilot-accounts" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#prompt">Skip to message</a>
@@ -123,6 +123,10 @@
         <div class="composer-dock">
           <div class="composer-inner">
             <p id="availability" class="availability" role="status" hidden></p>
+            <div id="pilot-bar" class="pilot-bar" hidden>
+              <p id="pilot-allowance" role="status"></p>
+              <button id="pilot-account" class="secondary-button" type="button">Sign in</button>
+            </div>
             <form id="chat-form" class="composer">
               <label class="sr-only" for="prompt">Your message</label>
               <textarea id="prompt" placeholder="Your message" rows="3" maxlength="16000" enterkeyhint="send"></textarea>
@@ -198,6 +202,20 @@
     <p>OserAI is building a shared network of independent computers. Your messages in this preview are sent to a hosted AI model to generate replies.</p>
     <div class="privacy-note"><h3>Your conversations</h3><p>Chat history is saved in this browser. Anyone using this browser profile can access its saved conversations.</p></div>
     <button id="clear-history" class="secondary-button" type="button">Clear all saved conversations</button>
+  </dialog>
+
+  <dialog id="sign-in-dialog" class="dialog" aria-labelledby="sign-in-title">
+    <h2 id="sign-in-title">Sign in to OserAI</h2>
+    <p>Enter the private access code you received for the pilot.</p>
+    <form id="sign-in-form" class="pilot-form" method="post">
+      <label for="access-code">Access code</label>
+      <input id="access-code" type="password" required maxlength="64" autocomplete="current-password" spellcheck="false" autofocus>
+      <p id="sign-in-error" class="pilot-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="secondary-button" type="button" data-close-dialog>Cancel</button>
+        <button id="sign-in-submit" class="secondary-button" type="submit">Sign in</button>
+      </div>
+    </form>
   </dialog>
 
   <dialog id="confirm-dialog" class="dialog confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-description">

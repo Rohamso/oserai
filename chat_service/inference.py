@@ -15,6 +15,7 @@ class Chunk:
     text: str = ""
     completion_tokens: int | None = None
     finished: bool = False
+    total_tokens: int | None = None
 
 
 class ChatRuntime:
@@ -44,7 +45,7 @@ class ChatRuntime:
         except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
             return False
 
-    async def stream(self, client: httpx.AsyncClient, messages: list[dict]):
+    async def stream(self, client: httpx.AsyncClient, messages: list[dict], reply_limit: int | None = None):
         settings = self.config
         if settings.inference_backend == "groq":
             # The completed JSON response includes usage and works with the cPanel proxy's buffered mode.
@@ -53,11 +54,22 @@ class ChatRuntime:
                 headers=self.upstream_headers,
                 json={
                     "model": settings.model_name, "messages": messages, "stream": False,
-                    "max_completion_tokens": settings.max_output_tokens, "temperature": 0.7,
+                    "max_completion_tokens": reply_limit if reply_limit is not None else settings.max_output_tokens,
+                    "temperature": 0.7,
                 },
             )
             response.raise_for_status()
             value = response.json()
+            usage = value.get("usage") or {}
+            count = usage.get("completion_tokens")
+            prompt = usage.get("prompt_tokens")
+            total = usage.get("total_tokens")
+            completion = count if type(count) is int and count >= 0 else None
+            total = total if type(total) is int and total > 0 else 0
+            if completion is not None and type(prompt) is int and prompt >= 0:
+                total = max(total, prompt + completion)
+            # Report provider usage even when the completion body is unusable.
+            yield Chunk(completion_tokens=completion, total_tokens=total or None)
             choices = value.get("choices")
             if value.get("error") or not isinstance(choices, list) or not choices:
                 raise ValueError("Invalid Groq completion")
@@ -65,8 +77,7 @@ class ChatRuntime:
             text = (choice.get("message") or {}).get("content")
             if not isinstance(text, str) or not text.strip() or choice.get("finish_reason") not in ("stop", "length"):
                 raise ValueError("Incomplete Groq completion")
-            count = (value.get("usage") or {}).get("completion_tokens")
-            yield Chunk(text=text, completion_tokens=count if type(count) is int and count >= 0 else None, finished=True)
+            yield Chunk(text=text, finished=True)
             return
 
         ollama = settings.inference_backend == "ollama"

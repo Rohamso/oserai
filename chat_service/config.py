@@ -25,6 +25,14 @@ class ChatConfig:
     requests_per_minute: int = 10
     requests_per_day: int = 100
     groq_api_key: str = field(default="", repr=False)
+    accounts_required: int = 0
+    pilot_accounts: str = field(default="", repr=False)
+    database_url: str = field(default="", repr=False)
+    user_tokens_per_day: int = 5000
+    shared_tokens_per_day: int = 100000
+    shared_tokens_per_minute: int = 6000
+    shared_requests_per_day: int = 800
+    shared_requests_per_minute: int = 20
 
     @classmethod
     def load(cls) -> "ChatConfig":
@@ -37,6 +45,8 @@ class ChatConfig:
         if any(getattr(config, name) <= 0 for name in (
             "max_output_tokens", "max_input_chars", "timeout_s", "max_concurrent",
             "requests_per_minute", "requests_per_day", "ollama_context_length",
+            "user_tokens_per_day", "shared_tokens_per_day", "shared_tokens_per_minute",
+            "shared_requests_per_day", "shared_requests_per_minute",
         )):
             raise ValueError("Chat limits must be positive")
         if not config.parallax_url.startswith(("http://", "https://")):
@@ -60,4 +70,8 @@ class ChatConfig:
             len(self.gateway_key) >= 32
             and bool(self.model_name)
             and (self.inference_backend != "groq" or bool(self.groq_api_key.strip()))
+            and (
+                not self.accounts_required
+                or (self.inference_backend == "groq" and bool(self.database_url and self.pilot_accounts))
+            )
         )

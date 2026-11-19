@@ -4,6 +4,7 @@
   const STORAGE = "oserai.chat.v1";
   let conversations = [], currentId = null, generation = null, csrf = "", ready = false, maxInput = 16000;
   let toastTimer, deleteAction, confirmTrigger;
+  let accountsRequired = false, signedIn = false, quota = null, changingAccount = false, statusCheck = 0;
   const icon = (name) => `<svg class="icon" aria-hidden="true"><use href="assets/icons.svg#${name}"></use></svg>`;
   const escape = (text) => String(text).replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
   const uid = () => crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -179,7 +180,7 @@
         }
         if (["error", "interrupted"].includes(message.state) && index === chat.messages.length - 1) {
           const retry = document.createElement("button"); retry.innerHTML = `${icon("retry")}<span>Try again</span>`;
-          retry.disabled = !ready || Boolean(generation);
+          retry.disabled = !canSend() || Boolean(generation);
           retry.addEventListener("click", () => {
             const user = chat.messages[index - 1];
             if (user?.role === "user") { chat.messages.splice(index - 1, 2); $("prompt").value = user.content; send(); }
@@ -192,9 +193,12 @@
     }
   }
 
+  function canSend() { return ready && (quota?.remaining ?? 1) > 0 && !changingAccount; }
+
   function controls() {
     const length = $("prompt").value.trim().length;
-    $("send-button").disabled = !length || !ready || Boolean(generation) || length > maxInput;
+    $("send-button").disabled = !length || !canSend() || Boolean(generation) || length > maxInput;
+    $("pilot-account").disabled = changingAccount || Boolean(generation) || !csrf;
     $("send-button").hidden = Boolean(generation);
     $("stop-button").hidden = !generation;
     $("character-count").textContent = `${$("prompt").value.length.toLocaleString()} / ${maxInput.toLocaleString()}`;
@@ -216,27 +220,97 @@
 
   function stop() { if (generation) generation.abort(); }
 
+  function renderPilot() {
+    $("pilot-bar").hidden = !accountsRequired;
+    $("pilot-account").textContent = signedIn ? "Sign out" : "Sign in";
+    let label = signedIn ? "Daily allowance unavailable" : "Sign in with your pilot access code to chat.";
+    if (signedIn && quota) {
+      const reset = quota.resets_at.toLocaleTimeString([], {hour: "numeric", minute: "2-digit", timeZoneName: "short"});
+      label = `${quota.remaining.toLocaleString()} of ${quota.limit.toLocaleString()} tokens left · Resets at ${reset}`;
+    }
+    if ($("pilot-allowance").textContent !== label) $("pilot-allowance").textContent = label;
+  }
+
+  function parseQuota(value) {
+    if (!Number.isSafeInteger(value?.limit) || !Number.isSafeInteger(value?.remaining)) return null;
+    const resets_at = new Date(value.resets_at);
+    return Number.isFinite(resets_at.getTime()) ? {...value, resets_at} : null;
+  }
+
   async function availability() {
-    const wasReady = ready;
+    if (changingAccount) return;
+    const check = ++statusCheck;
+    const couldSend = canSend();
+    let online = false;
     try {
-      const response = await fetch("api.php?action=status", {credentials: "same-origin", cache: "no-store", signal: AbortSignal.timeout(10000)});
+      const response = await fetch("api.php?action=status", {credentials: "same-origin", cache: "no-store", signal: AbortSignal.timeout(17000)});
       if (!response.ok) throw new Error("unavailable");
       const status = await response.json();
-      ready = status.ready === true;
+      if (check !== statusCheck) return;
+      online = status.ready === true;
       csrf = typeof status.csrf_token === "string" ? status.csrf_token : "";
+      if (typeof status.accounts_required === "boolean") {
+        accountsRequired = status.accounts_required;
+        signedIn = status.signed_in === true;
+        quota = signedIn ? parseQuota(status.quota) : null;
+      }
       maxInput = Math.max(1, Math.min(Number(status.max_input_chars) || 16000, 16000));
       $("prompt").maxLength = maxInput;
       $("model-name").textContent = status.model_label || "OserAI Chat";
-    } catch { ready = false; }
+    } catch {
+      if (check !== statusCheck) return;
+    }
+    ready = online && (!accountsRequired || signedIn);
     document.querySelectorAll("[data-network-status]").forEach((status) => {
-      status.classList.toggle("ready", ready);
-      status.classList.toggle("offline", !ready);
-      status.lastElementChild.textContent = ready ? "Network · Online" : "Network · Offline";
+      status.classList.toggle("ready", online);
+      status.classList.toggle("offline", !online);
+      status.lastElementChild.textContent = online ? "Network · Online" : "Network · Offline";
     });
-    $("availability").hidden = ready;
-    $("availability").textContent = ready ? "" : "Chat is coming online. Please check back soon.";
+    $("availability").hidden = online;
+    $("availability").textContent = online ? "" : "Chat is coming online. Please check back soon.";
+    renderPilot();
     controls();
-    if (ready !== wasReady && !generation) renderMessages();
+    if (canSend() !== couldSend && !generation) renderMessages();
+  }
+
+  async function changeAccount(signingIn) {
+    if (changingAccount || !csrf) return;
+    const code = $("access-code").value.trim();
+    const errorText = $("sign-in-error");
+    errorText.hidden = true;
+    changingAccount = true;
+    statusCheck++;
+    $("sign-in-submit").disabled = true;
+    controls();
+    try {
+      const response = await fetch(`api.php?action=${signingIn ? "login" : "logout"}`, {
+        method: "POST", credentials: "same-origin", signal: AbortSignal.timeout(17000),
+        headers: {"Content-Type": "application/json", "X-CSRF-Token": csrf},
+        body: JSON.stringify(signingIn ? {code} : {}),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || typeof payload.csrf_token !== "string") {
+        throw new Error(payload.message || "Couldn’t update your sign-in. Please try again.");
+      }
+      csrf = payload.csrf_token;
+      signedIn = signingIn;
+      quota = null;
+      ready = false;
+      if (signingIn) $("sign-in-dialog").close();
+      renderPilot();
+    } catch (error) {
+      if (signingIn) {
+        errorText.textContent = error.name === "TimeoutError" ? "Sign-in timed out. Try again shortly." : error.message;
+        errorText.hidden = false;
+      } else {
+        toast("Couldn’t sign out. Please try again.");
+      }
+    } finally {
+      changingAccount = false;
+      $("sign-in-submit").disabled = false;
+      controls();
+      availability();
+    }
   }
 
   async function consume(response, onEvent) {
@@ -269,7 +343,7 @@
 
   async function send() {
     const text = $("prompt").value.trim();
-    if (!text || !ready || generation || text.length > maxInput) return;
+    if (!text || !canSend() || generation || text.length > maxInput) return;
     let chat = current();
     if (!chat) {
       chat = {id: uid(), title: text.replace(/\s+/g, " ").slice(0, 55), updatedAt: Date.now(), messages: []};
@@ -287,6 +361,7 @@
     const controller = new AbortController(); generation = controller;
     $("prompt").value = ""; persist(); render(); scrollDown();
     $("screen-status").textContent = "OserAI is preparing a reply.";
+    let receivedQuota = false;
     try {
       const response = await fetch("api.php?action=chat", {
         method: "POST", credentials: "same-origin", signal: controller.signal,
@@ -295,7 +370,7 @@
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        if (response.status === 403) availability();
+        if (response.status === 403 && !accountsRequired) availability();
         throw new Error(payload.message || "Chat is unavailable right now. Please try again shortly.");
       }
       await consume(response, (name, data) => {
@@ -308,6 +383,13 @@
         }
         if (name === "done") {
           assistant.state = "complete"; assistant.include = true;
+          const updated = parseQuota(data.quota);
+          if (signedIn && updated) {
+            statusCheck++;
+            quota = updated;
+            receivedQuota = true;
+            renderPilot();
+          }
         }
       });
       if (!assistant.content.trim()) throw new Error("The reply was empty. Please try again.");
@@ -322,6 +404,7 @@
       persist(); history();
       if (currentId === chat.id) renderMessages();
       controls();
+      if (accountsRequired && !receivedQuota) availability();
     }
   }
 
@@ -348,6 +431,15 @@
   $("sidebar-scrim").addEventListener("click", closeSidebar);
   $("close-sidebar").addEventListener("click", closeSidebar);
   $("about-button").addEventListener("click", () => { sidebar(false); $("about-dialog").showModal(); });
+  $("pilot-account").addEventListener("click", () => {
+    if (signedIn) changeAccount(false);
+    else $("sign-in-dialog").showModal();
+  });
+  $("sign-in-form").addEventListener("submit", (event) => { event.preventDefault(); changeAccount(true); });
+  $("sign-in-dialog").addEventListener("close", () => {
+    $("sign-in-form").reset();
+    $("sign-in-error").hidden = true;
+  });
   document.querySelectorAll("[data-close-dialog]").forEach((button) => button.addEventListener("click", () => button.closest("dialog").close()));
   function clearSavedConversations(trigger) {
     $("about-dialog").close();
@@ -401,6 +493,11 @@
     else if (!$("sidebar").classList.contains("open")) $("sidebar").inert = true;
     controls();
   });
-  setInterval(() => { if (document.visibilityState === "visible") availability(); }, 30000);
+  setInterval(() => {
+    if (document.visibilityState !== "visible") return;
+    if (!accountsRequired || (signedIn && (!ready || !quota || Date.now() >= quota.resets_at.getTime()))) {
+      availability();
+    }
+  }, 30000);
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") availability(); });
 })();

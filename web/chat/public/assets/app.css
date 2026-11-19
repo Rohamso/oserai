@@ -262,6 +262,12 @@ input::placeholder, textarea::placeholder { color: var(--os-muted); opacity: 1; 
 .has-conversation .save-notice-short { display: inline; }
 .dock-hint { display: none; }
 .availability { margin-bottom: 9px; color: var(--os-ink-2); font-size: 13px; line-height: 1.4; }
+.pilot-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-block-end: 8px; }
+.pilot-bar p { color: var(--os-ink-2); font-size: 13px; line-height: 1.4; }
+.pilot-bar button { flex-shrink: 0; }
+.pilot-form label { display: block; margin-block: 16px 4px; font-size: 14px; }
+.pilot-form input { width: 100%; min-height: var(--os-tap); padding: 8px 12px; border: 1px solid var(--os-line-2); background: var(--os-paper); font-size: 16px; }
+.pilot-form p.pilot-error { margin-block-start: 8px; color: var(--os-danger); }
 
 .has-conversation .composer-dock { position: sticky; z-index: 1; bottom: 0; margin-block-start: auto; padding-block: 16px 20px; border-top: 1px solid var(--os-line); }
 .has-conversation .composer { flex-direction: row; align-items: flex-end; gap: 8px; padding: 8px 8px 8px 18px; }

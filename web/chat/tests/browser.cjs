@@ -13,16 +13,32 @@ const csp = fs.readFileSync(path.join(root, ".htaccess"), "utf8")
 fs.mkdirSync(output, {recursive: true});
 const previewPrompt = "How do I test two computers running a model together?";
 let mode = "ready", requests = [], openStreams = 0;
+let pilotRemaining = 5000;
+const pilotCode = "A".repeat(43);
+const pilotQuota = () => ({limit: 5000, remaining: pilotRemaining, resets_at: new Date(Date.now() + 86400000).toISOString()});
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
-  if (url.pathname === "/api.php" && url.searchParams.get("action") === "status") {
+  const action = url.searchParams.get("action");
+  const signedIn = (req.headers.cookie || "").includes("test-pilot=1");
+  if (url.pathname === "/api.php" && action === "status") {
     res.writeHead(200, {"Content-Type": "application/json"});
-    return res.end(JSON.stringify({ready: mode !== "offline", csrf_token: "test-csrf-token", model_label: "OserAI Chat", max_input_chars: 16000}));
+    return res.end(JSON.stringify({ready: mode !== "offline", csrf_token: "test-csrf-token", model_label: "OserAI Chat",
+      max_input_chars: 16000, accounts_required: mode === "pilot", signed_in: signedIn, quota: signedIn ? pilotQuota() : null}));
   }
   if (url.pathname === "/api.php" && req.method === "POST") {
     let raw = ""; for await (const chunk of req) raw += chunk;
-    const body = JSON.parse(raw); requests.push(body);
+    const body = JSON.parse(raw);
     assert.equal(req.headers["x-csrf-token"], "test-csrf-token");
+    if (action === "login" || action === "logout") {
+      if (action === "login" && body.code !== pilotCode) {
+        res.writeHead(401, {"Content-Type": "application/json"});
+        return res.end(JSON.stringify({message: "That access code is invalid."}));
+      }
+      res.writeHead(200, {"Content-Type": "application/json", "Set-Cookie": "test-pilot=" + (action === "login" ? "1" : "0") + "; Path=/; HttpOnly"});
+      return res.end(JSON.stringify({csrf_token: "test-csrf-token"}));
+    }
+    if (mode === "pilot") assert.equal(signedIn, true);
+    requests.push(body);
     if (mode === "busy") { res.writeHead(503, {"Content-Type": "application/json"}); return res.end(JSON.stringify({message: "All chat slots are busy. Please try again shortly."})); }
     res.writeHead(200, {"Content-Type": "text/event-stream", "Cache-Control": "no-cache"});
     const event = (name, payload) => res.write(`event: ${name}\ndata: ${JSON.stringify(payload)}\n\n`);
@@ -49,7 +65,11 @@ const server = http.createServer(async (req, res) => {
     const timer = setInterval(() => {
       if (res.destroyed) { clearInterval(timer); return; }
       if (index < parts.length) event("token", {text: parts[index++]});
-      else { event("done", {completion_tokens: 32}); res.end(); clearInterval(timer); }
+      else {
+        if (mode === "pilot") pilotRemaining = 0;
+        event("done", {completion_tokens: 32, quota: signedIn ? pilotQuota() : null});
+        res.end(); clearInterval(timer);
+      }
     }, slow ? 700 : 35);
     res.on("close", () => { clearInterval(timer); openStreams--; });
     return;
@@ -296,11 +316,37 @@ async function run() {
     for (const [width, height] of [[1440, 1000], [1024, 900], [390, 844]]) {
       await checkRedesign(browser, base, width, height);
     }
+    mode = "pilot";
+    const pilot = await browser.newPage({viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true, locale: "en-US"});
+    pilot.on("pageerror", (error) => errors.push(error.message));
+    await pilot.goto(base);
+    await pilot.locator("#prompt").fill("A pilot question");
+    assert.equal(await pilot.locator("#send-button").isDisabled(), true);
+    await pilot.locator("#pilot-account").click();
+    const signIn = pilot.getByRole("dialog", {name: "Sign in to OserAI"});
+    await signIn.getByLabel("Access code").fill("wrong");
+    await signIn.getByRole("button", {name: "Sign in", exact: true}).click();
+    await signIn.getByRole("alert").getByText("That access code is invalid.").waitFor();
+    await signIn.getByLabel("Access code").fill(pilotCode);
+    await signIn.getByRole("button", {name: "Sign in", exact: true}).click();
+    await pilot.getByText(/5,000 of 5,000 tokens left · Resets at/).waitFor();
+    await pilot.getByRole("button", {name: "Send message", exact: true}).click();
+    await pilot.getByText(/0 of 5,000 tokens left · Resets at/).waitFor();
+    await pilot.locator("#prompt").fill("Another question");
+    assert.equal(await pilot.locator("#send-button").isDisabled(), true);
+    await pilot.reload();
+    await pilot.getByText(/0 of 5,000 tokens left · Resets at/).waitFor();
+    await pilot.getByRole("button", {name: "Sign out", exact: true}).click();
+    await pilot.getByText("Sign in with your pilot access code to chat.").waitFor();
+    await checkLayout(pilot, 390);
+    await pilot.close();
+    mode = "ready";
     assert.deepEqual(errors, []);
     fs.writeFileSync(path.join(output, "browser-checks.json"), JSON.stringify({
       passed: true, widths: [1440, 1024, 390],
       checks: ["safe Markdown", "streaming", "context", "copy/export", "history/search", "stop/retry",
-        "offline", "clear history", "keyboard shortcuts", "skip link", "sticky composer", "dialog focus", "tap targets"],
+        "offline", "clear history", "keyboard shortcuts", "skip link", "sticky composer", "dialog focus", "tap targets",
+        "pilot sign-in, allowance updates, exhaustion, and sign-out"],
       consoleErrors: errors,
     }, null, 2));
     console.log("Browser checks passed at 1440px, 1024px, and 390px.");
