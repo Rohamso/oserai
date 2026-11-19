@@ -138,7 +138,22 @@ def create_app(config: ChatConfig | None = None, upstream: httpx.AsyncClient | N
                 # Enforce a total deadline as well as HTTP socket timeouts.
                 async with asyncio.timeout(settings.timeout_s):
                     yield "start", {"request_id": request_id, "model_label": settings.model_label}
-                    async with aclosing(runtime.stream(app.state.upstream, [message.model_dump() for message in body.messages])) as chunks:
+                    messages = [
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are OserAI, an AI assistant. Give clear, practical answers. "
+                                "Say when you are unsure. Ask a short clarifying question "
+                                "when a missing detail would change the answer. "
+                                "When asked who you are, introduce yourself as OserAI. "
+                                f"When asked what powers this chat, say it uses "
+                                f"{settings.model_name} served by {settings.inference_backend}."
+                            ),
+                        },
+                    ]
+                    messages.extend(message.model_dump() for message in body.messages)
+
+                    async with aclosing(runtime.stream(app.state.upstream, messages)) as chunks:
                         async for chunk in chunks:
                             if await request.is_disconnected():
                                 return
