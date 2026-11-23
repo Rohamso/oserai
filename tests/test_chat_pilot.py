@@ -11,7 +11,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from chat_service.config import ChatConfig
+from chat_service.config import GUIDE_MODEL, ChatConfig
 from chat_service.main import create_app
 from chat_service.pilot import PilotAccounts, PilotUsage, prompt_token_bound
 from chat_service.usage import QuotaExceeded
@@ -86,6 +86,7 @@ def client_for(settings, calls, modes=None):
         if mode == "rate-limited":
             return httpx.Response(429, json={"error": {"message": "private provider detail"}})
         return httpx.Response(200, json={
+            "model": calls[-1]["model"],
             "choices": [{"message": {"content": "Answer 🌱"}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 201, "completion_tokens": 23, "total_tokens": 224}
             if mode != "unknown-usage" else {},
@@ -151,6 +152,20 @@ def test_unknown_groq_usage_holds_the_reservation(pilot_config, postgres_url):
         assert "parallax join" in sent["messages"][0]["content"]
         reserved = prompt_token_bound(sent["messages"]) + sent["max_completion_tokens"]
         assert answer.json()["quota"]["remaining"] == 5000 - reserved
+
+
+def test_guide_preview_requires_an_invite_and_debits_actual_usage(pilot_config, postgres_url):
+    settings = replace(pilot_config, database_url=postgres_url, guide_url="https://guide.example",
+                       guide_api_key="g" * 42)
+    calls = []
+    with client_for(settings, calls) as client:
+        assert talk(client, HEADERS, text="/guide What is OserAI?").status_code == 401
+        assert calls == []
+        account = login(client, CODE)
+        reply = talk(client, account, text="/guide What is OserAI?")
+        assert reply.status_code == 200
+        assert calls[0]["model"] == GUIDE_MODEL
+        assert reply.json()["quota"]["remaining"] == 5000 - 224
 
 
 @pytest.mark.parametrize("limit", ["shared_tokens_per_minute", "shared_tokens_per_day", "user_tokens_per_day"])

@@ -22,7 +22,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
-from chat_service.config import ChatConfig
+from chat_service.config import GUIDE_LABEL, GUIDE_MODEL, ChatConfig
 from chat_service.inference import ChatRuntime
 from chat_service.knowledge import guide_context, load_guides, match_guide
 from chat_service.pilot import PilotAccounts, PilotUnavailable, PilotUsage, prompt_token_bound
@@ -31,6 +31,7 @@ from chat_service.usage import QuotaExceeded, UsageStore
 UNAVAILABLE = "Chat is coming online. Please check back soon."
 UPSTREAM_RATE_LIMITED = "Chat has reached its shared usage limit. Please try again later."
 SIGN_IN_REQUIRED = "Sign in with your OserAI access code to chat."
+GUIDE_UNAVAILABLE = "The OserAI Guide preview is unavailable. Try regular OserAI Chat."
 LOG = logging.getLogger(__name__)
 
 
@@ -172,27 +173,42 @@ def create_app(config: ChatConfig | None = None, upstream: httpx.AsyncClient | N
             raise HTTPException(400, "Please refresh the page and try again.")
         if sum(len(message.content) for message in body.messages) > settings.max_input_chars:
             raise HTTPException(422, "This conversation is full. Please start a new chat.")
+        history = [message.model_dump() for message in body.messages]
+        command = history[-1]["content"].strip().split(maxsplit=1)
+        guide_preview = bool(command and command[0].casefold() == "/guide")
+        if guide_preview:
+            if len(command) == 1:
+                raise HTTPException(422, "Add your question after /guide.")
+            if not settings.guide_url or not settings.guide_api_key:
+                raise HTTPException(503, GUIDE_UNAVAILABLE)
+            history[-1]["content"] = command[1]
         if app.state.active >= settings.max_concurrent:
             raise HTTPException(503, "All chat slots are busy. Please try again shortly.", headers={"Retry-After": "10"})
-        if not account and not await model_available():
+        if not guide_preview and not account and not await model_available():
             raise HTTPException(503, UNAVAILABLE)
         # Recheck after awaiting the upstream model inventory.
         if app.state.active >= settings.max_concurrent:
             raise HTTPException(503, "All chat slots are busy. Please try again shortly.")
-        source = match_guide(guides, [message.content for message in body.messages if message.role == "user"])
-        messages = [{
-            "role": "system",
-            "content": (
+        source = match_guide(guides, [message["content"] for message in history if message["role"] == "user"])
+        model_label = GUIDE_LABEL if guide_preview else settings.model_label
+        if guide_preview:
+            system_prompt = (
+                f"You are {GUIDE_LABEL} ({GUIDE_MODEL}), an experimental OserAI support assistant. "
+                "Give a short practical answer. Use the supplied guide for project details and say when you are unsure."
+            )
+        else:
+            system_prompt = (
                 "You are OserAI, an AI assistant. Give clear, practical answers. "
                 "Say when you are unsure. Ask a short clarifying question "
                 "when a missing detail would change the answer. "
                 "When asked who you are, introduce yourself as OserAI. "
                 f"When asked what powers this chat, say it uses "
                 f"{settings.model_name} served by {settings.inference_backend}."
-                + guide_context(source)
-            ),
-        }]
-        messages.extend(message.model_dump() for message in body.messages)
+            )
+        messages = [{
+            "role": "system",
+            "content": system_prompt + guide_context(source),
+        }, *history]
         try:
             prompt_bound = prompt_token_bound(messages) if account else 0
         except UnicodeError:
@@ -218,8 +234,10 @@ def create_app(config: ChatConfig | None = None, upstream: httpx.AsyncClient | N
             try:
                 # Enforce a total deadline as well as HTTP socket timeouts.
                 async with asyncio.timeout(settings.timeout_s):
-                    yield "start", {"request_id": request_id, "model_label": settings.model_label}
-                    async with aclosing(runtime.stream(app.state.upstream, messages, reply_limit)) as chunks:
+                    yield "start", {"request_id": request_id, "model_label": model_label}
+                    async with aclosing(runtime.stream(
+                        app.state.upstream, messages, reply_limit, guide_preview=guide_preview,
+                    )) as chunks:
                         async for chunk in chunks:
                             if chunk.completion_tokens is not None:
                                 tokens = chunk.completion_tokens
@@ -228,6 +246,8 @@ def create_app(config: ChatConfig | None = None, upstream: httpx.AsyncClient | N
                             if await request.is_disconnected():
                                 return
                             if chunk.text:
+                                if guide_preview and not answer:
+                                    yield "token", {"text": f"**{model_label} (preview)**\n\n"}
                                 answer += chunk.text
                                 if len(answer) > 100000:
                                     raise ValueError("Completion is too large")
@@ -246,9 +266,11 @@ def create_app(config: ChatConfig | None = None, upstream: httpx.AsyncClient | N
                 outcome = "error"
                 if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in (400, 401, 403, 404, 422, 429):
                     total_tokens = 0
-                if (settings.inference_backend == "groq" and isinstance(exc, httpx.HTTPStatusError)
+                if (not guide_preview and settings.inference_backend == "groq" and isinstance(exc, httpx.HTTPStatusError)
                         and exc.response.status_code == 429):
                     yield "error", {"message": UPSTREAM_RATE_LIMITED, "status": 429}
+                elif guide_preview:
+                    yield "error", {"message": GUIDE_UNAVAILABLE, "status": 503}
                 else:
                     yield "error", {"message": "The reply was interrupted. Please try again in a moment."}
                 return
@@ -258,7 +280,7 @@ def create_app(config: ChatConfig | None = None, upstream: httpx.AsyncClient | N
                     try:
                         if total_tokens is not None:
                             if total_tokens > prompt_bound + reply_limit:
-                                LOG.warning("Groq reported more tokens than the pilot reserved")
+                                LOG.warning("An inference backend reported more tokens than the pilot reserved")
                             await app.state.pilot.finish(request_id, total_tokens)
                         if outcome == "completed":
                             quota = await app.state.pilot.allowance(account)

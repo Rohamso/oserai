@@ -225,6 +225,45 @@ entry. To replace a code, generate one for the same ID and replace only its
 digest. Redeploy after editing the JSON. Replacing a digest revokes existing
 sessions for that ID and preserves its token balance.
 
+## Offer OserAI Guide v0.1 to invited testers
+
+After sign-in, type `/guide How do I add my Mac as a worker?` in the existing
+chat box. The prefix selects OserAI Guide for that reply. The answer shows a
+preview label and links any contributor guide it consulted. Regular messages
+use the configured chat provider, and both paths use the existing pilot limits.
+
+Guide is a small experimental fine-tune. In the first evaluation, both the
+base and the adapter passed one of ten OserAI keyword checks. Use the preview
+for evaluation and consult the linked guides for setup details.
+
+The private repository contains the [Guide adapter](../models/oserai-guide-v0.1/README.md).
+On a machine that will host the model, install the training dependencies and
+llama.cpp's conversion dependencies in a Python environment. The export was
+tested with llama.cpp revision `c212d25ad34ff1fdf775793cda07e009560cf66b`.
+
+```bash
+python scripts/export_guide.py --llama-cpp /path/to/llama.cpp \
+  --output out/oserai-guide-v0.1-Q8_0.gguf
+```
+
+Build Colibri v2.2.0's `qwen36` engine, import the GGUF with `c/coli import`,
+and serve the generated model directory. Set `COLI_API_KEY` in the service's
+private environment to a new random key of at least 32 characters.
+
+```bash
+c/coli serve --model /path/to/oserai-guide-v0.1-Q8_0.colibri \
+  --model-id oserai-guide-v0.1 --ctx 4096 --host 127.0.0.1 --port 8081
+```
+
+Put the model runtime behind a stable HTTPS endpoint reachable by Render.
+Have the reverse proxy forward only `POST /v1/chat/completions` to Colibri.
+Set `OSERAI_CHAT_GUIDE_URL` to that endpoint and `OSERAI_CHAT_GUIDE_API_KEY`
+to the runtime key in the Render service's private environment. Deploy the
+gateway, sign in at chat.oserai.network, and send a `/guide` prompt and a
+regular prompt. Verify the preview label appears on the first reply and that
+both requests reduce the pilot allowance. Remove both Guide environment
+variables to disable preview replies.
+
 ## Connect a self-hosted inference service
 
 ### On the inference host

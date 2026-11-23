@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 
 GROQ_API_URL = "https://api.groq.com/openai/v1"
+GUIDE_MODEL = "oserai-guide-v0.1"
+GUIDE_LABEL = "OserAI Guide v0.1"
 
 
 @dataclass(frozen=True)
@@ -33,6 +36,8 @@ class ChatConfig:
     shared_tokens_per_minute: int = 6000
     shared_requests_per_day: int = 800
     shared_requests_per_minute: int = 20
+    guide_url: str = ""
+    guide_api_key: str = field(default="", repr=False)
 
     @classmethod
     def load(cls) -> "ChatConfig":
@@ -55,6 +60,14 @@ class ChatConfig:
             raise ValueError("OSERAI_CHAT_OLLAMA_URL must be an HTTP(S) URL")
         if config.inference_backend not in ("parallax", "ollama", "groq"):
             raise ValueError("OSERAI_CHAT_INFERENCE_BACKEND must be one of: parallax, ollama, groq")
+        if config.guide_url or config.guide_api_key:
+            guide = urlsplit(config.guide_url)
+            secure = guide.scheme == "https" or (
+                guide.scheme == "http" and guide.hostname in {"127.0.0.1", "::1", "localhost"}
+            )
+            if (not secure or not guide.hostname or guide.username is not None or guide.query or guide.fragment
+                    or len(config.guide_api_key.strip()) < 32):
+                raise ValueError("Guide requires a trusted HTTPS URL or loopback and a separate API key of at least 32 characters")
         return config
 
     @property
@@ -62,6 +75,11 @@ class ChatConfig:
         if self.inference_backend == "groq":
             return GROQ_API_URL
         base = self.parallax_url.rstrip("/")
+        return base if base.endswith("/v1") else base + "/v1"
+
+    @property
+    def guide_api_url(self) -> str:
+        base = self.guide_url.rstrip("/")
         return base if base.endswith("/v1") else base + "/v1"
 
     @property

@@ -7,7 +7,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from chat_service.config import ChatConfig
+from chat_service.config import GUIDE_LABEL, GUIDE_MODEL, ChatConfig
 from chat_service.main import create_app
 from scripts.package_chat_site import FILES, FRONTEND_FILES, package
 
@@ -112,6 +112,59 @@ def test_unrelated_worker_question_does_not_use_project_docs(config):
         })
     assert result.json()["text"] == "Hello world 🌱"
     assert "OserAI guide excerpt" not in json.loads(sent[-1].content)["messages"][0]["content"]
+
+
+def test_guide_preview_uses_its_own_endpoint_and_key(config):
+    guide_key = "g" * 42
+    config = replace(config, inference_backend="groq", groq_api_key=GROQ_KEY, model_name=GROQ_MODEL,
+                     guide_url="https://guide.example/v1/", guide_api_key=guide_key)
+    sent = []
+
+    def handler(request):
+        sent.append(request)
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": GROQ_MODEL}]})
+        is_guide = request.url.host == "guide.example"
+        return httpx.Response(200, json={
+            "model": GUIDE_MODEL if is_guide else GROQ_MODEL,
+            "choices": [{"message": {"content": "A real reply"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 44, "completion_tokens": 3, "total_tokens": 47},
+        })
+
+    upstream = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    with TestClient(create_app(config, upstream)) as client:
+        preview = client.post("/api/chat", headers=HEADERS, json={"stream": False, "messages": [
+            {"role": "user", "content": "/guide How do I add my Mac as a worker?"},
+        ]})
+        regular = client.post("/api/chat", headers=HEADERS, json={"stream": False, "messages": [
+            {"role": "user", "content": "Hello"},
+        ]})
+    assert preview.status_code == regular.status_code == 200
+    assert preview.json()["model_label"] == GUIDE_LABEL
+    assert preview.json()["text"].startswith(f"**{GUIDE_LABEL} (preview)**\n\nA real reply")
+    assert preview.json()["completion_tokens"] == 3
+    assert "Guide consulted" in preview.json()["text"]
+    assert regular.json()["text"] == "A real reply"
+    guide_request, inventory, regular_request = sent
+    assert str(guide_request.url) == "https://guide.example/v1/chat/completions"
+    assert guide_request.headers["authorization"] == f"Bearer {guide_key}"
+    payload = json.loads(guide_request.content)
+    assert payload["model"] == GUIDE_MODEL and payload["max_completion_tokens"] == 160
+    assert payload["messages"][-1]["content"] == "How do I add my Mac as a worker?"
+    assert "parallax join" in payload["messages"][0]["content"]
+    assert inventory.url.host == regular_request.url.host == "api.groq.com"
+    assert regular_request.headers["authorization"] == f"Bearer {GROQ_KEY}"
+
+
+def test_unconfigured_guide_preview_returns_unavailable_without_calling_a_provider(config):
+    sent = []
+    with make_client(config, requests=sent) as client:
+        response = client.post("/api/chat", headers=HEADERS, json={"messages": [
+            {"role": "user", "content": "/guide What is OserAI?"},
+        ]})
+    assert response.status_code == 503
+    assert "preview is unavailable" in response.json()["message"]
+    assert sent == []
 
 
 @pytest.mark.parametrize("content,status", [

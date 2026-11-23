@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import httpx
 
-from chat_service.config import ChatConfig
+from chat_service.config import GUIDE_MODEL, ChatConfig
 
 
 @dataclass(frozen=True)
@@ -45,18 +45,24 @@ class ChatRuntime:
         except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
             return False
 
-    async def stream(self, client: httpx.AsyncClient, messages: list[dict], reply_limit: int | None = None):
+    async def stream(
+        self, client: httpx.AsyncClient, messages: list[dict], reply_limit: int | None = None,
+        *, guide_preview: bool = False,
+    ):
         settings = self.config
-        if settings.inference_backend == "groq":
+        if settings.inference_backend == "groq" or guide_preview:
             # The completed JSON response includes usage and works with the cPanel proxy's buffered mode.
+            limit = reply_limit if reply_limit is not None else settings.max_output_tokens
+            payload = {"model": settings.model_name, "messages": messages, "stream": False,
+                       "max_completion_tokens": limit, "temperature": 0.7}
+            api_url, headers = settings.api_url, self.upstream_headers
+            if guide_preview:
+                api_url = settings.guide_api_url
+                headers = {"Authorization": f"Bearer {settings.guide_api_key.strip()}"}
+                payload.update(model=GUIDE_MODEL, max_completion_tokens=min(limit, 160),
+                               temperature=0.0, reasoning_effort="none")
             response = await client.post(
-                settings.api_url + "/chat/completions",
-                headers=self.upstream_headers,
-                json={
-                    "model": settings.model_name, "messages": messages, "stream": False,
-                    "max_completion_tokens": reply_limit if reply_limit is not None else settings.max_output_tokens,
-                    "temperature": 0.7,
-                },
+                api_url + "/chat/completions", headers=headers, json=payload,
             )
             response.raise_for_status()
             value = response.json()
@@ -70,13 +76,15 @@ class ChatRuntime:
                 total = max(total, prompt + completion)
             # Report provider usage even when the completion body is unusable.
             yield Chunk(completion_tokens=completion, total_tokens=total or None)
+            if guide_preview and value.get("model") != GUIDE_MODEL:
+                raise ValueError("Guide completion returned an unexpected model")
             choices = value.get("choices")
             if value.get("error") or not isinstance(choices, list) or not choices:
-                raise ValueError("Invalid Groq completion")
+                raise ValueError("Invalid completion")
             choice = choices[0]
             text = (choice.get("message") or {}).get("content")
             if not isinstance(text, str) or not text.strip() or choice.get("finish_reason") not in ("stop", "length"):
-                raise ValueError("Incomplete Groq completion")
+                raise ValueError("Incomplete completion")
             yield Chunk(text=text, finished=True)
             return
 
