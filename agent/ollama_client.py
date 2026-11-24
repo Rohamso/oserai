@@ -3,21 +3,16 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
-
 import httpx
 
+from common.inference import InferenceError, InferenceResult
 
-class OllamaError(Exception):
+
+class OllamaError(InferenceError):
     pass
 
 
-@dataclass
-class OllamaResult:
-    output_text: str
-    tokens_generated: int
-    duration_s: float
-    tokens_per_sec: float
+OllamaResult = InferenceResult
 
 
 def run_inference(
@@ -25,9 +20,9 @@ def run_inference(
 ) -> OllamaResult:
     """Run one deterministic inference call against Ollama's /api/generate.
 
-    temperature=0 and seed=42 are non-negotiable: they're what make identical
-    prompts on an identical model tag produce byte-identical output across
-    different nodes, which is the whole basis for verification-by-hash.
+    temperature=0 and seed=42 reduce sampling variation for hash comparison.
+    Identical output still depends on model weights, quantization and runtime;
+    a mismatch alone is not evidence that a contributor acted dishonestly.
     """
     start = time.monotonic()
     try:

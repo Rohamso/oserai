@@ -11,7 +11,7 @@ services:
       context: .
       dockerfile: Dockerfile.coordinator
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       COORDINATOR_DB_PATH: /data/coordinator.db
       COORDINATOR_HEARTBEAT_TIMEOUT_S: "90"

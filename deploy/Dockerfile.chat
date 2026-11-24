@@ -1,0 +1,9 @@
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements-chat.txt ./
+RUN pip install --no-cache-dir -r requirements-chat.txt
+COPY chat_service ./chat_service
+COPY docs/parallax-mvp.md ./docs/parallax-mvp.md
+COPY desktop_app/README.md ./desktop_app/README.md
+EXPOSE 8010
+CMD ["uvicorn", "chat_service.main:app", "--host", "127.0.0.1", "--port", "8010", "--workers", "1"]

@@ -48,12 +48,13 @@
 <table id="nodes-table">
   <thead>
     <tr>
-      <th>Name</th><th>Role</th><th>Status</th><th>Jobs Done</th><th>Failed</th>
+      <th>Name</th><th>Role</th><th>Backend</th><th>Status</th><th>Jobs Done</th><th>Failed</th>
       <th>Tok/s</th><th>Failure %</th><th>Mismatches</th><th>Uptime %</th>
     </tr>
   </thead>
   <tbody></tbody>
 </table>
+<p class="muted">Each Parallax node represents one cluster bridge. Worker inventory and shard placement are available in Parallax.</p>
 
 <h2>Training Runs</h2>
 <div id="training-runs"></div>
@@ -64,6 +65,8 @@
 <p class="muted">Polling /stats every 5s, /training/runs every 5s.</p>
 
 <script>
+const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+
 async function refresh() {
   let res;
   try {
@@ -90,8 +93,10 @@ async function refresh() {
       const eta = b.eta_seconds === null ? "?" : `${Math.round(b.eta_seconds)}s`;
       return `
         <div class="batch-block">
-          <div><b>${b.batch_id.slice(0, 8)}</b> (${b.model_name}) &mdash;
+          <div><b>${b.batch_id.slice(0, 8)}</b> (${escapeHtml(b.model_name)}, ${escapeHtml(b.inference_backend)}) &mdash;
             ${done}/${b.total_jobs} done, ${b.retry_count} retries, ETA ${eta}, ${b.throughput_tokens_per_sec.toFixed(1)} tok/s</div>
+          ${b.inference_backend === 'parallax' ? '<div class="muted">Cluster usage &middot; exact-output verification disabled</div>' : ''}
+          <a href="/batches/${encodeURIComponent(b.batch_id)}/jobs">View results</a>
           <div class="progress-bar"><div class="progress-fill" style="width:${pct}%">${pct}%</div></div>
         </div>`;
     }).join("");
@@ -100,14 +105,15 @@ async function refresh() {
   const tbody = document.querySelector("#nodes-table tbody");
   tbody.innerHTML = data.nodes.map(n => `
     <tr>
-      <td>${n.name}</td>
-      <td>${n.role}</td>
+      <td>${escapeHtml(n.name)}</td>
+      <td>${escapeHtml(n.role)}</td>
+      <td>${n.role === 'inference' ? escapeHtml(n.inference_backend) : '&mdash;'}</td>
       <td class="status-${n.status}">${n.status}</td>
       <td>${n.jobs_done}</td>
       <td>${n.jobs_failed}</td>
       <td>${n.tokens_per_sec_avg.toFixed(1)}</td>
       <td>${(n.failure_rate * 100).toFixed(1)}</td>
-      <td>${n.mismatch_count}</td>
+      <td>${n.inference_backend === 'parallax' ? '&mdash;' : n.mismatch_count}</td>
       <td>${n.uptime_pct.toFixed(0)}</td>
     </tr>`).join("");
 }

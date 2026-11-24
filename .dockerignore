@@ -1,8 +1,12 @@
 .git/
-.venv/
+.venv*/
 __pycache__/
+.pytest_cache/
 *.pyc
 *.pt
+*.safetensors
+*.gguf
+*.parquet
 *.db
 *.db-wal
 *.db-shm
@@ -12,10 +16,14 @@ desktop_app/dist/
 node_config.yaml
 train_node_config.yaml
 .node_state.json
+.parallax_node_state.json
 .train_node_state.json
-test_batch.jsonl
-test_batch2.jsonl
-test_batch3.jsonl
+test_batch*.jsonl
+**/.env
+**/.env.*
+deploy/chat.env
+deploy/docker-compose.override.local.yaml
+web/chat/config.php
 
 # fetched at runtime by scripts/prepare_training_data.py -- only needed by
 # training scripts/agents, never by the coordinator itself (see

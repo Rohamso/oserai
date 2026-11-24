@@ -1,9 +1,69 @@
-# Distributed AI Inference Network — Phase 1 PoC
+# OserAI
 
-Prove that mixed consumer hardware (gaming PCs, Macs, laptops, Raspberry Pi)
-can serve batch LLM inference jobs reliably, with result verification and
-full performance logging. No blockchain, no tokens, no payments — a SQLite
-table simulates the ledger that a real chain would replace in a later phase.
+OserAI is an experimental network for running and fine-tuning language models on
+computers people already own. A coordinator queues jobs and records results.
+Contributor agents connect out, pick up work, and return their results. This
+lets a group of trusted machines share inference capacity without giving every
+worker a public address.
+
+| Area | What you can try |
+| --- | --- |
+| Batch inference | Run jobs on local Ollama nodes or use a bridge to a Parallax cluster. The coordinator tracks retries, results, and usage. |
+| Chat | Run a separate chat gateway and web client with an Ollama, Parallax, or Groq backend. An optional Colibri endpoint can serve an experimental Guide model. |
+| Training | Run experimental DiLoCo rounds on trusted contributor devices, or build reviewed data shards and run a local CPT-to-SFT pilot. |
+
+The coordinator uses a simulated usage ledger. Network pilots run on trusted
+machines. Public contributor onboarding and training update verification are
+still under development.
+
+## Run a first inference job
+
+Use Python 3.11 or later, and start [Ollama](https://ollama.com/) on the same
+machine. The commands below use a POSIX shell and keep the coordinator on
+localhost.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+ollama pull llama3.2:1b
+mkdir -p out
+COORDINATOR_DB_PATH=out/quickstart.db python -m uvicorn coordinator.main:app --host 127.0.0.1 --port 8000
+```
+
+In a second terminal from the repository root, start a worker.
+
+```bash
+source .venv/bin/activate
+AGENT_COORDINATOR_URL=http://127.0.0.1:8000 AGENT_MODEL_NAME=llama3.2:1b AGENT_STATE_PATH=out/quickstart-node.json \
+  python -m agent.main --config agent/node_config.example.yaml
+```
+
+In a third terminal, submit one prompt. Open the printed results URL or the
+[local dashboard](http://127.0.0.1:8000/).
+
+```bash
+source .venv/bin/activate
+python -m scripts.generate_test_batch --count 1 --output out/quickstart.jsonl
+python -m scripts.submit_batch out/quickstart.jsonl --coordinator-url http://127.0.0.1:8000 \
+  --model-name llama3.2:1b --max-tokens 128 --verification-pct 0
+```
+
+## Contribute
+
+Try a chat prompt and report an incorrect reply, reproduce a local inference
+benchmark, or help prepare the first trusted training cohort. Start with the
+[contribution guide](CONTRIBUTING.md).
+
+- [Parallax cluster and benchmarking](docs/parallax-mvp.md)
+- [Chat gateway and cPanel deployment](docs/chat-cpanel.md)
+- [Windows Ollama host setup](docs/chat-windows.md)
+- [Desktop training agent](desktop_app/README.md)
+- [Model adaptation and source audit](docs/model-adaptation.md)
+
+The repository source code uses the [Apache License 2.0](LICENSE). Models,
+[training data](training/data/README.md), and third-party dependencies retain
+their own licenses.
 
 ## Architecture
 
@@ -47,8 +107,10 @@ every poll.
 common/        shared JSON-line logging + sha256 helper
 coordinator/   FastAPI app, SQLite data layer, dispatch/scoring/verification,
                training round dispatch (training_dispatch.py), dashboard
-agent/         node agent: config, Ollama client, coordinator client, main
+agent/         node agent: config, inference clients, coordinator client, main
                loop; train_agent.py is the separate DiLoCo training node loop
+chat_service/  chat gateway, invite accounts, and usage limits
+web/chat/      browser client and cPanel PHP proxy
 desktop_app/   PySide6 GUI wrapping train_agent.py -- see "Desktop app" below
 scripts/       generate_test_batch.py, submit_batch.py, chaos.py,
                prepare_training_data.py, train_local.py, train_local_lora.py,
@@ -56,7 +118,8 @@ scripts/       generate_test_batch.py, submit_batch.py, chaos.py,
 training/      model/dataset/tokenizer/outer-optimizer code shared by the
                coordinator and every training agent -- lora.py and
                chat_dataset.py are the LoRA-on-a-real-model path, model.py
-               and dataset.py are the from-scratch path
+               and dataset.py are the from-scratch path. adaptation_data.py
+               packs reviewed inputs for the local CPT-to-SFT pilot.
 tests/         pytest suite (dispatch scoring, verification, requeue,
                heartbeat expiry, DiLoCo round lifecycle)
 ```
@@ -167,7 +230,7 @@ python scripts/submit_batch.py test_batch.jsonl \
 `submit_batch.py` tails `/batches/{id}` and prints a live progress line
 until the batch completes.
 
-## Docker-compose demo (no real hardware needed)
+## Docker Compose demo
 
 Runs the coordinator plus 3 fake agents on one machine, all pointed at your
 host's Ollama:

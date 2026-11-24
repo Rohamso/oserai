@@ -1,5 +1,4 @@
-"""Node agent: registers with the coordinator, heartbeats, pulls jobs, runs
-them against a local Ollama instance, and reports results back."""
+"""Register, heartbeat, and run jobs through Ollama or a Parallax cluster."""
 
 from __future__ import annotations
 
@@ -16,8 +15,9 @@ import psutil
 
 from agent.config import AgentConfig
 from agent.coordinator_client import CoordinatorClient
-from agent.ollama_client import OllamaError, run_inference
+from agent.inference import run_inference
 from common.hashing import sha256_hex
+from common.inference import InferenceError
 from common.logging_setup import log_event, setup_logging
 
 logger = setup_logging("agent")
@@ -29,24 +29,39 @@ class AgentState:
         self.shutdown_requested = threading.Event()
 
 
-def _load_saved_credentials(state_path: str) -> Optional[dict[str, str]]:
+def _load_saved_credentials(state_path: str) -> Optional[dict[str, Any]]:
     p = Path(state_path)
     if not p.exists():
         return None
     try:
-        return json.loads(p.read_text())
+        saved = json.loads(p.read_text())
+        if isinstance(saved, dict) and all(isinstance(saved.get(key), str) for key in ("node_id", "token")):
+            return saved
+        return None
     except (json.JSONDecodeError, OSError):
         return None
 
 
-def _save_credentials(state_path: str, node_id: str, token: str) -> None:
-    Path(state_path).write_text(json.dumps({"node_id": node_id, "token": token}))
+def _registration_identity(config: AgentConfig) -> dict[str, str]:
+    return {
+        "coordinator_url": config.coordinator_url.rstrip("/"),
+        "model_name": config.model_name,
+        "inference_backend": config.inference_backend,
+        "inference_url": (config.parallax_url if config.inference_backend == "parallax" else config.ollama_url).rstrip("/"),
+    }
+
+
+def _save_credentials(config: AgentConfig, node_id: str, token: str) -> None:
+    Path(config.state_path).write_text(json.dumps({
+        "node_id": node_id, "token": token, "identity": _registration_identity(config),
+    }))
 
 
 def _register_payload(config: AgentConfig) -> dict[str, Any]:
     return {
         "name": config.node_name,
         "model_name": config.model_name,
+        "inference_backend": config.inference_backend,
         "max_concurrent_jobs": config.max_concurrent_jobs,
         "city": config.city,
         "country": config.country,
@@ -60,7 +75,7 @@ def ensure_registered(client: CoordinatorClient, config: AgentConfig) -> None:
     """Reuse a saved node_id/token if the coordinator still recognizes it
     (same DB, agent just restarted); otherwise register fresh."""
     saved = _load_saved_credentials(config.state_path)
-    if saved:
+    if saved and saved.get("identity") == _registration_identity(config):
         client.node_id, client.token = saved["node_id"], saved["token"]
         status = client.heartbeat(status="idle", cpu_pct=0.0, ram_free_mb=0.0)
         if status == 200:
@@ -68,8 +83,15 @@ def ensure_registered(client: CoordinatorClient, config: AgentConfig) -> None:
             return
         log_event(logger, "saved_registration_invalid_reregistering", node_id=client.node_id, status=status)
 
+    if saved:
+        # Retire the old registration when a state file is reused for another
+        # backend/model/endpoint. The old credentials cannot authenticate to
+        # an unrelated coordinator.
+        client.node_id, client.token = saved["node_id"], saved["token"]
+        client.deregister()
+
     node_id, token = client.register(_register_payload(config))
-    _save_credentials(config.state_path, node_id, token)
+    _save_credentials(config, node_id, token)
     log_event(logger, "node_registered", node_id=node_id, name=config.node_name)
 
 
@@ -86,8 +108,10 @@ def run_job(client: CoordinatorClient, config: AgentConfig, job: dict[str, Any],
     log_event(logger, "job_running", job_id=job_id)
     state.status = "busy"
     try:
+        if job.get("inference_backend", "ollama") != config.inference_backend:
+            raise InferenceError("Job inference backend does not match this agent's configuration")
         result = run_inference(
-            config.ollama_url, job["model_name"], job["prompt"], job["max_tokens"], job["timeout_s"],
+            config, job["model_name"], job["prompt"], job["max_tokens"], job["timeout_s"],
         )
         client.post_result(job_id, {
             "node_id": client.node_id,
@@ -99,7 +123,7 @@ def run_job(client: CoordinatorClient, config: AgentConfig, job: dict[str, Any],
             "tokens_per_sec": result.tokens_per_sec,
         })
         log_event(logger, "job_completed", job_id=job_id, tokens=result.tokens_generated, tps=round(result.tokens_per_sec, 2))
-    except OllamaError as exc:
+    except InferenceError as exc:
         client.post_result(job_id, {"node_id": client.node_id, "success": False, "error": str(exc)})
         log_event(logger, "job_failed", job_id=job_id, error=str(exc))
     finally:

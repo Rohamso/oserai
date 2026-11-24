@@ -9,6 +9,8 @@ from typing import Any, Optional
 
 import yaml
 
+from common.inference import InferenceBackend
+
 _ENV_PREFIX = "AGENT_"
 
 
@@ -28,6 +30,15 @@ class AgentConfig:
     poll_interval_s: float = 3.0
     poll_backoff_cap_s: float = 300.0
     state_path: str = ".node_state.json"
+    inference_backend: InferenceBackend = "ollama"
+    parallax_url: str = "http://localhost:3001"
+
+    def __post_init__(self) -> None:
+        if self.inference_backend not in ("ollama", "parallax"):
+            raise ValueError("inference_backend must be ollama or parallax")
+        url = self.parallax_url if self.inference_backend == "parallax" else self.ollama_url
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            raise ValueError(f"{self.inference_backend} URL must start with http:// or https://")
 
     @classmethod
     def load(cls, path: str = "node_config.yaml") -> "AgentConfig":
@@ -52,6 +63,8 @@ class AgentConfig:
             "poll_interval_s": data.get("poll_interval_s", 3.0),
             "poll_backoff_cap_s": data.get("poll_backoff_cap_s", 300.0),
             "state_path": data.get("state_path", ".node_state.json"),
+            "inference_backend": data.get("inference_backend", "ollama"),
+            "parallax_url": data.get("parallax_url", "http://localhost:3001"),
         }
 
         for key, current in list(values.items()):

@@ -12,7 +12,7 @@ import httpx
 
 def load_prompts(path: str) -> list[str]:
     prompts = []
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -25,18 +25,22 @@ def main() -> None:
     parser.add_argument("file", help='JSONL file of {"prompt": ...} lines')
     parser.add_argument("--coordinator-url", default="http://localhost:8000")
     parser.add_argument("--model-name", required=True)
+    parser.add_argument("--inference-backend", choices=("ollama", "parallax"), default="ollama")
     parser.add_argument("--max-tokens", type=int, default=256)
     parser.add_argument("--timeout-s", type=int, default=300)
     parser.add_argument("--verification-pct", type=float, default=None)
     parser.add_argument("--poll-interval", type=float, default=2.0)
     args = parser.parse_args()
+    if args.inference_backend == "parallax" and args.verification_pct not in (None, 0):
+        parser.error("Parallax batches require --verification-pct 0 (or omit the flag)")
 
     prompts = load_prompts(args.file)
-    print(f"submitting {len(prompts)} prompts (model={args.model_name})...")
+    print(f"submitting {len(prompts)} prompts (backend={args.inference_backend}, model={args.model_name})...")
 
     payload: dict = {
         "prompts": prompts,
         "model_name": args.model_name,
+        "inference_backend": args.inference_backend,
         "max_tokens": args.max_tokens,
         "timeout_s": args.timeout_s,
     }
@@ -67,7 +71,7 @@ def main() -> None:
             break
         time.sleep(args.poll_interval)
 
-    print("\nbatch complete.")
+    print(f"\nbatch complete. Results: {args.coordinator_url}/batches/{batch_id}/jobs")
 
 
 if __name__ == "__main__":

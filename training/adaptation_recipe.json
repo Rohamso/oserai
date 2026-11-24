@@ -1,0 +1,38 @@
+{
+  "cpt": {
+    "target_corpus_tokens": 50000000000,
+    "context": 8192,
+    "global_batch_tokens": [2000000, 4000000],
+    "framework": "Megatron-DeepSpeed or PyTorch FSDP with full sharding",
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "epsilon": 1e-8,
+    "schedule": "cosine",
+    "warmup_steps": 2000,
+    "peak_lr": 2.5e-5,
+    "min_lr": 2.5e-6,
+    "replay_fraction": 0.05,
+    "source_token_targets": {
+      "everyday_web": 20000000000,
+      "factual": 10000000000,
+      "logic_code": 10000000000,
+      "prose": 5000000000,
+      "stem_health": 5000000000
+    }
+  },
+  "sft": {
+    "target_dialogues": 750000,
+    "format": "ChatML",
+    "assistant_only": true,
+    "loss_ignore_index": -100,
+    "epochs": [2, 3],
+    "peak_lr": 5e-6,
+    "schedule": "linear_warmup",
+    "weight_decay": 0.01
+  },
+  "release": {
+    "weights": ["safetensors", "awq-4bit", "gptq-4bit", "gguf-q4_k_m", "gguf-q8_0"],
+    "data_publication": "IPFS or Arweave after redistribution review",
+    "governance_fields": ["dataset_root_cid", "model_commit", "training_license_manifest"]
+  }
+}

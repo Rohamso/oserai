@@ -39,6 +39,7 @@ def compute_batch_progress(db: Database, batch: dict[str, Any]) -> dict[str, Any
     return {
         "batch_id": batch["id"],
         "model_name": batch["model_name"],
+        "inference_backend": batch["inference_backend"],
         "total_jobs": batch["total_jobs"],
         "queued": counts["queued"],
         "dispatched": counts["dispatched"],
@@ -74,6 +75,7 @@ def compute_node_stats(node: dict[str, Any], heartbeat_timeout_s: int) -> dict[s
         "node_id": node["id"],
         "name": node["name"],
         "role": node["role"],
+        "inference_backend": node["inference_backend"],
         "status": node["status"],
         "jobs_done": jobs_done,
         "jobs_failed": jobs_failed,

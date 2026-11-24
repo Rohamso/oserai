@@ -1,0 +1,14 @@
+# Add this site block to the inference host's Caddy configuration. Set the
+# domain to your gateway subdomain; it must point to that host first.
+YOUR-CHAT-GATEWAY-DOMAIN {
+    request_body {
+        max_size 160KB
+    }
+    @chat path /api/status /api/chat /health
+    handle @chat {
+        reverse_proxy 127.0.0.1:8010
+    }
+    handle {
+        respond 404
+    }
+}
