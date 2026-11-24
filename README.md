@@ -1,4 +1,8 @@
+[![OserAI logo](docs/assets/oserai-mark.svg)](https://oserai.network/)
+
 # OserAI
+
+[oserai.network](https://oserai.network/)
 
 OserAI is an experimental network for running and fine-tuning language models on
 computers people already own. A coordinator queues jobs and records results.
