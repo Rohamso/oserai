@@ -1,4 +1,8 @@
+[![OserAI logo](docs/assets/oserai-mark.svg)](https://oserai.network/)
+
 # Distributed AI Inference Network — Phase 1 PoC
+
+[oserai.network](https://oserai.network/)
 
 Prove that mixed consumer hardware (gaming PCs, Macs, laptops, Raspberry Pi)
 can serve batch LLM inference jobs reliably, with result verification and
