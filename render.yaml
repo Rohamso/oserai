@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: oserai-chat-pilot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements-chat.txt
+    startCommand: uvicorn chat_service.main:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /health
+    envVars:
+      - key: OSERAI_CHAT_INFERENCE_BACKEND
+        value: groq
+      - key: OSERAI_CHAT_MODEL_NAME
+        value: qwen/qwen3.8-27b
+      - key: OSERAI_CHAT_GROQ_API_KEY
+        sync: false
+      - key: OSERAI_CHAT_GATEWAY_KEY
+        generateValue: true
+      - key: OSERAI_CHAT_TIMEOUT_S
+        value: "30"
+      - key: OSERAI_CHAT_MAX_OUTPUT_TOKENS
+        value: "512"
+      - key: OSERAI_CHAT_MAX_INPUT_CHARS
+        value: "6000"
+      - key: OSERAI_CHAT_MAX_CONCURRENT
+        value: "2"
+      - key: OSERAI_CHAT_REQUESTS_PER_MINUTE
+        value: "4"
+      - key: OSERAI_CHAT_REQUESTS_PER_DAY
+        value: "30"

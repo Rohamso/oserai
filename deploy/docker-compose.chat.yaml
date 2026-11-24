@@ -1,0 +1,17 @@
+# Linux inference host only. Host networking keeps Parallax at 127.0.0.1:3001.
+# Put Caddy/Nginx HTTPS in front of this loopback-only service.
+services:
+  chat:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.chat
+    network_mode: host
+    restart: unless-stopped
+    env_file: chat.env
+    environment:
+      OSERAI_CHAT_DB_PATH: /data/chat-usage.db
+    volumes:
+      - chat_usage:/data
+
+volumes:
+  chat_usage:

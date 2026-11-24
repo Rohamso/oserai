@@ -6,10 +6,13 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from common.inference import InferenceBackend
+
 
 class NodeRegisterRequest(BaseModel):
     name: str
     model_name: str
+    inference_backend: InferenceBackend = "ollama"
     max_concurrent_jobs: int = 1
     city: Optional[str] = None
     country: Optional[str] = None
@@ -36,6 +39,7 @@ class NodeOut(BaseModel):
     country: Optional[str]
     hardware: Optional[str]
     model_name: str
+    inference_backend: InferenceBackend = "ollama"
     role: str
     max_concurrent_jobs: int
     measured_watts: Optional[float]
@@ -56,9 +60,10 @@ class NodeOut(BaseModel):
 class BatchCreateRequest(BaseModel):
     prompts: list[str]
     model_name: str
+    inference_backend: InferenceBackend = "ollama"
     max_tokens: int = 256
     timeout_s: int = 300
-    verification_pct: Optional[float] = None  # None -> coordinator default
+    verification_pct: Optional[float] = Field(default=None, ge=0, le=1)
 
 
 class BatchCreateResponse(BaseModel):
@@ -72,6 +77,18 @@ class JobNextResponse(BaseModel):
     max_tokens: int
     timeout_s: int
     model_name: str
+    inference_backend: InferenceBackend = "ollama"
+
+
+class JobOut(BaseModel):
+    id: str
+    status: str
+    prompt: str
+    output_text: Optional[str]
+    tokens_generated: Optional[int]
+    duration_s: Optional[float]
+    tokens_per_sec: Optional[float]
+    error: Optional[str]
 
 
 class JobResultRequest(BaseModel):
@@ -88,6 +105,7 @@ class JobResultRequest(BaseModel):
 class BatchProgress(BaseModel):
     batch_id: str
     model_name: str
+    inference_backend: InferenceBackend = "ollama"
     total_jobs: int
     queued: int
     dispatched: int
@@ -105,6 +123,7 @@ class NodeStats(BaseModel):
     node_id: str
     name: str
     role: str
+    inference_backend: InferenceBackend = "ollama"
     status: str
     jobs_done: int
     jobs_failed: int

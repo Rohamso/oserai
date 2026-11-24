@@ -25,6 +25,7 @@ from coordinator.models import (
     BatchProgress,
     HeartbeatRequest,
     JobNextResponse,
+    JobOut,
     JobResultRequest,
     NodeOut,
     NodeRegisterRequest,
@@ -138,6 +139,7 @@ def register_node(req: NodeRegisterRequest) -> NodeRegisterResponse:
     node_id = db.register_node(
         name=req.name, token=token, city=req.city, country=req.country,
         hardware=req.hardware, model_name=req.model_name,
+        inference_backend=req.inference_backend,
         max_concurrent_jobs=req.max_concurrent_jobs,
         measured_watts=req.measured_watts, grid_zone=req.grid_zone,
     )
@@ -173,12 +175,21 @@ def list_nodes() -> list[NodeOut]:
 def create_batch(req: BatchCreateRequest) -> BatchCreateResponse:
     if not req.prompts:
         raise HTTPException(status_code=400, detail="prompts must not be empty")
-    verification_pct = req.verification_pct if req.verification_pct is not None else config.default_verification_pct
+    if req.inference_backend == "parallax":
+        if req.verification_pct not in (None, 0):
+            raise HTTPException(
+                status_code=400,
+                detail="Parallax batches require verification_pct=0: exact-output verification is not supported for shared clusters",
+            )
+        verification_pct = 0.0
+    else:
+        verification_pct = req.verification_pct if req.verification_pct is not None else config.default_verification_pct
 
     batch_id = db.create_batch(
         model_name=req.model_name, max_tokens=req.max_tokens, timeout_s=req.timeout_s,
         verification_pct=verification_pct, payout_rate=config.default_payout_rate,
         total_jobs=len(req.prompts),
+        inference_backend=req.inference_backend,
     )
     for prompt in req.prompts:
         if random.random() < verification_pct:
@@ -188,7 +199,7 @@ def create_batch(req: BatchCreateRequest) -> BatchCreateResponse:
         else:
             db.create_job(batch_id, prompt, req.max_tokens, req.timeout_s)
 
-    log_event(logger, "batch_created", batch_id=batch_id, total_jobs=len(req.prompts), model_name=req.model_name)
+    log_event(logger, "batch_created", batch_id=batch_id, total_jobs=len(req.prompts), model_name=req.model_name, inference_backend=req.inference_backend)
     return BatchCreateResponse(batch_id=batch_id, total_jobs=len(req.prompts))
 
 
@@ -198,6 +209,13 @@ def get_batch(batch_id: str) -> BatchProgress:
     if batch is None:
         raise HTTPException(status_code=404, detail="unknown batch")
     return BatchProgress(**compute_batch_progress(db, batch))
+
+
+@app.get("/batches/{batch_id}/jobs", response_model=list[JobOut])
+def get_batch_jobs(batch_id: str) -> list[JobOut]:
+    if db.get_batch(batch_id) is None:
+        raise HTTPException(status_code=404, detail="unknown batch")
+    return [JobOut(**job) for job in db.list_jobs_for_batch(batch_id) if not job["is_duplicate"]]
 
 
 @app.get("/jobs/next")
@@ -211,6 +229,7 @@ def next_job(node_id: str, authorization: Optional[str] = Header(None)):
     return JobNextResponse(
         job_id=job["id"], prompt=job["prompt"], max_tokens=job["max_tokens"],
         timeout_s=job["timeout_s"], model_name=batch["model_name"],
+        inference_backend=batch["inference_backend"],
     )
 
 

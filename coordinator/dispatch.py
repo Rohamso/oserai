@@ -76,11 +76,12 @@ def dispatch_queued_jobs(db: Database, config: CoordinatorConfig) -> list[tuple[
     reserved_node_ids: set[str] = set()
     median = db.median_tokens_per_sec()
 
-    model_names = {j["model_name"] for j in _queued_jobs_with_model(db)}
-    for model_name in model_names:
-        queued = [j for j in _queued_jobs_with_model(db) if j["model_name"] == model_name]
+    queued_jobs = _queued_jobs_with_model(db)
+    targets = {(j["model_name"], j["inference_backend"]) for j in queued_jobs}
+    for model_name, inference_backend in targets:
+        queued = [j for j in queued_jobs if (j["model_name"], j["inference_backend"]) == (model_name, inference_backend)]
         idle_nodes = [
-            n for n in db.list_nodes_by_status_and_model("idle", model_name)
+            n for n in db.list_nodes_by_status_and_model("idle", model_name, inference_backend)
             if n["id"] not in reserved_node_ids
         ]
         for job in queued:
@@ -107,6 +108,7 @@ def _queued_jobs_with_model(db: Database) -> list[dict[str, Any]]:
             if job["status"] == "queued":
                 job = dict(job)
                 job["model_name"] = batch["model_name"]
+                job["inference_backend"] = batch["inference_backend"]
                 out.append(job)
     return out
 
@@ -168,6 +170,12 @@ def handle_job_result(
         raise ValueError(f"unknown job {job_id}")
     if job["assigned_node_id"] != node_id:
         raise ValueError(f"job {job_id} is not assigned to node {node_id}")
+    if job["status"] in ("completed", "verified", "mismatched"):
+        # Result submission retries after a lost HTTP response must not pay
+        # twice or free a node that has already started another job.
+        return job
+    if job["status"] not in ACTIVE_JOB_STATUSES:
+        raise ValueError(f"job {job_id} is not active")
 
     db.set_node_status(node_id, "idle")
 

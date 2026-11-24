@@ -17,6 +17,7 @@ import uuid
 from typing import Any, Optional
 
 from common.hashing import sha256_bytes
+from common.inference import InferenceBackend
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS nodes (
@@ -27,6 +28,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     country              TEXT,
     hardware            TEXT,
     model_name          TEXT NOT NULL,
+    inference_backend   TEXT NOT NULL DEFAULT 'ollama',
     role                TEXT NOT NULL DEFAULT 'inference',
     max_concurrent_jobs INTEGER NOT NULL DEFAULT 1,
     measured_watts      REAL,
@@ -47,6 +49,7 @@ CREATE TABLE IF NOT EXISTS nodes (
 CREATE TABLE IF NOT EXISTS batches (
     id                TEXT PRIMARY KEY,
     model_name        TEXT NOT NULL,
+    inference_backend TEXT NOT NULL DEFAULT 'ollama',
     max_tokens        INTEGER NOT NULL,
     timeout_s         INTEGER NOT NULL,
     verification_pct  REAL NOT NULL,
@@ -208,6 +211,13 @@ class Database:
         self._conn.execute("PRAGMA journal_mode = WAL")
         with self._lock:
             self._conn.executescript(SCHEMA_SQL)
+            # Existing installations keep their Ollama nodes and batches.
+            for table in ("nodes", "batches"):
+                columns = {row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")}
+                if "inference_backend" not in columns:
+                    self._conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN inference_backend TEXT NOT NULL DEFAULT 'ollama'"
+                    )
             self._conn.commit()
 
     def close(self) -> None:
@@ -230,18 +240,19 @@ class Database:
         measured_watts: Optional[float],
         grid_zone: Optional[str],
         role: str = "inference",
+        inference_backend: InferenceBackend = "ollama",
     ) -> str:
         node_id = str(uuid.uuid4())
         now = time.time()
         with self._lock:
             self._conn.execute(
                 """INSERT INTO nodes
-                   (id, name, token, city, country, hardware, model_name, role,
+                   (id, name, token, city, country, hardware, model_name, role, inference_backend,
                     max_concurrent_jobs, measured_watts, grid_zone, status,
                     last_heartbeat, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)""",
                 (
-                    node_id, name, token, city, country, hardware, model_name, role,
+                    node_id, name, token, city, country, hardware, model_name, role, inference_backend,
                     max_concurrent_jobs, measured_watts, grid_zone, now, now,
                 ),
             )
@@ -258,11 +269,14 @@ class Database:
             cur = self._conn.execute("SELECT * FROM nodes ORDER BY created_at")
             return _rows(cur.fetchall())
 
-    def list_nodes_by_status_and_model(self, status: str, model_name: str) -> list[dict[str, Any]]:
+    def list_nodes_by_status_and_model(
+        self, status: str, model_name: str, inference_backend: InferenceBackend = "ollama",
+    ) -> list[dict[str, Any]]:
         with self._lock:
             cur = self._conn.execute(
-                "SELECT * FROM nodes WHERE status = ? AND model_name = ?",
-                (status, model_name),
+                """SELECT * FROM nodes WHERE status = ? AND model_name = ?
+                   AND inference_backend = ? AND role = 'inference'""",
+                (status, model_name, inference_backend),
             )
             return _rows(cur.fetchall())
 
@@ -359,15 +373,18 @@ class Database:
     def create_batch(
         self, model_name: str, max_tokens: int, timeout_s: int,
         verification_pct: float, payout_rate: float, total_jobs: int,
+        inference_backend: InferenceBackend = "ollama",
     ) -> str:
+        if inference_backend == "parallax" and verification_pct != 0:
+            raise ValueError("Parallax batches require verification_pct=0")
         batch_id = str(uuid.uuid4())
         with self._lock:
             self._conn.execute(
                 """INSERT INTO batches
-                   (id, model_name, max_tokens, timeout_s, verification_pct,
+                   (id, model_name, inference_backend, max_tokens, timeout_s, verification_pct,
                     payout_rate, created_at, total_jobs)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (batch_id, model_name, max_tokens, timeout_s, verification_pct,
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (batch_id, model_name, inference_backend, max_tokens, timeout_s, verification_pct,
                  payout_rate, time.time(), total_jobs),
             )
             self._conn.commit()
@@ -468,7 +485,7 @@ class Database:
         with self._lock:
             self._conn.execute(
                 """UPDATE jobs SET status = 'completed', output_text = ?, output_sha256 = ?,
-                       tokens_generated = ?, duration_s = ?, tokens_per_sec = ?, completed_at = ?
+                       tokens_generated = ?, duration_s = ?, tokens_per_sec = ?, completed_at = ?, error = NULL
                    WHERE id = ?""",
                 (output_text, output_sha256, tokens_generated, duration_s,
                  tokens_per_sec, time.time(), job_id),

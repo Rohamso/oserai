@@ -1,0 +1,10 @@
+# One bridge agent per Parallax cluster; workers join Parallax directly.
+# Copy to parallax_node_config.yaml and match model_name to the cluster model.
+node_name: "parallax-cluster-1"
+coordinator_url: "http://localhost:8000"
+model_name: "Qwen/Qwen3-0.6B"
+inference_backend: "parallax"
+parallax_url: "http://localhost:3001"
+hardware: "Parallax cluster (aggregate usage; worker inventory lives in Parallax)"
+state_path: ".parallax_node_state.json"
+poll_interval_s: 1.0

@@ -17,6 +17,7 @@ measured_watts: null
 grid_zone: null
 
 # Optional, all have sane defaults:
+# inference_backend: "ollama"  # See parallax_node_config.example.yaml for a cluster bridge.
 # ollama_url: "http://localhost:11434"
 # heartbeat_interval_s: 30
 # poll_interval_s: 3
