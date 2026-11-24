@@ -10,6 +10,9 @@ Contributor agents connect out, pick up work, and return their results. This
 lets a group of trusted machines share inference capacity without giving every
 worker a public address.
 
+Help test OserAI on real hardware. [Run one local inference job](#run-a-first-inference-job)
+and [share your result](https://github.com/Rohamso/oserai/issues/2).
+
 | Area | What you can try |
 | --- | --- |
 | Batch inference | Run jobs on local Ollama nodes or use a bridge to a Parallax cluster. The coordinator tracks retries, results, and usage. |
@@ -27,6 +30,8 @@ machine. The commands below use a POSIX shell and keep the coordinator on
 localhost.
 
 ```bash
+git clone https://github.com/Rohamso/oserai.git
+cd oserai
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
@@ -52,6 +57,13 @@ python -m scripts.generate_test_batch --count 1 --output out/quickstart.jsonl
 python -m scripts.submit_batch out/quickstart.jsonl --coordinator-url http://127.0.0.1:8000 \
   --model-name llama3.2:1b --max-tokens 128 --verification-pct 0
 ```
+
+The dashboard shows **1/1 done**. Follow **View results** to confirm the job
+status is `completed`.
+
+This reference run used one local Ollama worker.
+
+![OserAI dashboard showing one local Ollama worker and a completed llama3.2:1b batch](docs/assets/oserai-first-job.png)
 
 ## Contribute
 

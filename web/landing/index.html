@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="OserAI lets teams pool computers they already own to run and evaluate language models. Help test the network on real hardware.">
+  <title>OserAI Network · AI on computers we already own</title>
+  <link rel="icon" href="assets/mark.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&amp;family=Albert+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/landing.css">
+  <script src="assets/hero-mark.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <a class="brand" href="#main" aria-label="OserAI Network home">
+      <img src="assets/mark.svg" width="26" height="26" alt="">
+      <span>oserai</span>
+    </a>
+    <nav class="site-nav" aria-label="Main navigation">
+      <a href="#how">How it works</a>
+      <a href="#verification">Verification</a>
+      <a href="#training">Training</a>
+      <a href="https://github.com/Rohamso/oserai">GitHub</a>
+      <a class="button button-ink" href="#contribute">Run a test</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="wrap hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <h1 id="hero-title">AI that runs on the computers we already own.</h1>
+        <p>OserAI lets small teams pool their computers to run and evaluate language models. Submit a batch once, let available devices pick up jobs, and collect the results in one place.</p>
+        <div class="actions">
+          <a class="button" href="#contribute">Run your first test</a>
+          <a class="text-link" href="https://github.com/Rohamso/oserai">View on GitHub</a>
+        </div>
+        <small>Research preview</small>
+      </div>
+      <div class="hero-visual" aria-hidden="true">
+        <svg id="hero-mark" width="340" height="340" viewBox="-100 -100 200 200" fill="none">
+          <g stroke="currentColor" stroke-width="11" stroke-linecap="round">
+            <circle r="42" stroke-dasharray="0 16.4934" transform="rotate(-90)"/>
+            <circle r="56" stroke-dasharray="0 17.5929" transform="rotate(-81)"/>
+            <circle r="70" stroke-dasharray="0 16.9163" transform="rotate(-86)"/>
+          </g>
+        </svg>
+      </div>
+    </section>
+
+    <section class="section section-raised" id="how" aria-labelledby="how-title">
+      <div class="wrap">
+        <p class="eyebrow">How it works</p>
+        <h2 id="how-title">A shared queue your team controls</h2>
+        <div class="how-grid">
+          <div>
+            <svg class="diagram-mark" viewBox="0 0 100 100" aria-hidden="true">
+              <circle cx="50" cy="50" r="30" fill="none" stroke="currentColor" stroke-width="9"/>
+              <circle cx="50" cy="50" r="8" fill="currentColor"/>
+            </svg>
+            <h3>Workers connect out</h3>
+            <p>Your team hosts the coordinator and chooses the devices that join. Workers connect out, so contributors can take part without opening ports on their home routers.</p>
+          </div>
+          <div>
+            <svg class="diagram-mark" viewBox="0 0 100 100" aria-hidden="true">
+              <circle cx="50" cy="50" r="30" fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-dasharray="0 18.85"/>
+            </svg>
+            <h3>Many devices share a batch</h3>
+            <p>The coordinator assigns independent jobs to idle workers that can run the requested model. This works well for evaluations and batch prompts, where each worker can finish its own job.</p>
+          </div>
+          <div>
+            <svg class="diagram-mark mark-gold" viewBox="0 0 100 100" aria-hidden="true">
+              <circle cx="50" cy="50" r="30" fill="none" stroke="currentColor" stroke-width="9" stroke-dasharray="161.5 27" transform="rotate(-70 50 50)"/>
+            </svg>
+            <h3>Jobs can be retried</h3>
+            <p>If a worker goes offline, the coordinator can put its unfinished job back in the queue. The dashboard tracks retries and completed results so you can see what happened.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="verification" aria-labelledby="verification-title">
+      <div class="wrap">
+        <div class="split">
+          <div class="section-copy">
+            <p class="eyebrow eyebrow-jade">Verification</p>
+            <h2 id="verification-title">Compare answers across devices</h2>
+            <p>The coordinator can send sampled prompts to a second worker running the same model with a fixed seed and compare the response hashes. A mismatch gives contributors an example to reproduce and investigate.</p>
+            <a class="text-link link-jade" href="https://github.com/Rohamso/oserai/blob/main/README.md#verification-sampling">Read about verification <span class="access-label">(GitHub)</span></a>
+          </div>
+          <aside class="stat-card" aria-label="Default verification sample rate">
+            <strong class="stat-value">5%</strong>
+            <p>Default share of jobs selected for a second run when verification is enabled. You can set the rate per batch.</p>
+          </aside>
+        </div>
+        <aside class="measurement-card" aria-labelledby="measurement-title">
+          <div>
+            <h3 id="measurement-title">What we need to measure</h3>
+            <p>How much faster does a batch finish when a few spare machines join? Your results help us measure that and find where setup or retries slow people down.</p>
+          </div>
+          <dl>
+            <div><dt>Throughput</dt><dd>Jobs completed per minute</dd></div>
+            <div><dt>Reliability</dt><dd>Jobs that finish successfully</dd></div>
+          </dl>
+        </aside>
+      </div>
+    </section>
+
+    <section class="section section-raised" id="training" aria-labelledby="training-title">
+      <div class="wrap split training-split">
+        <ul class="training-flow">
+          <li>
+            <svg class="flow-mark mark-clay" viewBox="0 0 100 100" aria-hidden="true">
+              <circle cx="50" cy="50" r="32" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round" stroke-dasharray="0 20.1"/>
+            </svg>
+            <span>Train on a local data shard</span>
+          </li>
+          <li>
+            <svg class="flow-mark" viewBox="0 0 100 100" aria-hidden="true">
+              <circle cx="50" cy="50" r="32" fill="none" stroke="currentColor" stroke-width="10"/>
+              <circle cx="50" cy="50" r="9" fill="currentColor"/>
+            </svg>
+            <span>Send the adapter update</span>
+          </li>
+          <li>
+            <svg class="flow-mark mark-gold" viewBox="0 0 100 100" aria-hidden="true">
+              <circle cx="50" cy="50" r="32" fill="none" stroke="currentColor" stroke-width="10" stroke-dasharray="172 29" transform="rotate(-70 50 50)"/>
+            </svg>
+            <span>Combine updates at the coordinator</span>
+          </li>
+        </ul>
+        <div class="section-copy">
+          <p class="eyebrow eyebrow-clay">Experimental training</p>
+          <h2 id="training-title">Can spare computers help fine-tune a model?</h2>
+          <p>OserAI is testing DiLoCo with LoRA. Workers train locally for several steps before sending adapter updates, reducing how often they need to communicate. Live training rounds currently use invited, trusted devices.</p>
+          <a class="text-link" href="https://github.com/Rohamso/oserai/blob/main/docs/model-adaptation.md">Read the training pilot <span class="access-label">(GitHub)</span></a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section-dark" id="contribute" aria-labelledby="contribute-title">
+      <div class="wrap split">
+        <div class="section-copy">
+          <p class="eyebrow">Contributor testing</p>
+          <h2 id="contribute-title">Help test OserAI on real hardware</h2>
+          <p>We’re looking for people with laptops, Macs, and gaming PCs to run one inference job and tell us what happened. A failed run can reveal as much as a successful one.</p>
+          <div class="actions">
+            <a class="button button-light" href="https://github.com/Rohamso/oserai#run-a-first-inference-job">Open the quickstart</a>
+            <a class="text-link" href="https://github.com/Rohamso/oserai/blob/main/CONTRIBUTING.md">Contribution guide</a>
+          </div>
+        </div>
+        <ol class="test-steps">
+          <li>
+            <h3>Set up one computer</h3>
+            <p>Install Python 3.11 or later and <a href="https://ollama.com/download">Ollama</a>. Run <code>ollama pull llama3.2:1b</code>.</p>
+          </li>
+          <li>
+            <h3>Run one local job</h3>
+            <p>Use the quickstart to start the coordinator and worker on one device. Submit one prompt, then open <strong>View results</strong> in the dashboard and check for <code>completed</code>.</p>
+          </li>
+          <li>
+            <h3>Report what happened</h3>
+            <p>Include your OS, CPU or GPU, RAM, and the result or exact error. <a href="https://github.com/Rohamso/oserai/issues/2">Share your test result on GitHub</a>.</p>
+          </li>
+        </ol>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <a class="brand footer-brand" href="#main">
+        <img src="assets/mark.svg" width="18" height="18" alt="">
+        <span>oserai.network</span>
+      </a>
+      <nav class="footer-nav" aria-label="Footer navigation">
+        <a href="https://github.com/Rohamso/oserai">GitHub</a>
+        <a href="#contribute">Contribute</a>
+        <a href="https://chat.oserai.network/">OserAI Chat</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>
