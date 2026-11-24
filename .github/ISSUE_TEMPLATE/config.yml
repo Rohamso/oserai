@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Share a first-run result
+    url: https://github.com/Rohamso/oserai/issues/2
+    about: Share your hardware and the result of the one-job quickstart.
+  - name: Report a security vulnerability privately
+    url: https://github.com/Rohamso/oserai/security/advisories
+    about: Open the advisories page and select Report a vulnerability.
